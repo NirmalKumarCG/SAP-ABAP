@@ -79,8 +79,70 @@ DATA : p_file TYPE rlgrap-filename,
 
 4. GUI_DOWNLOAD.(Declare the fields which the excel needs to have ty_dwld , it_dwld - output of GUI_DOWNLOAD )
 
+CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+        filename                = gv_file
+        filetype                = 'DAT'
+        write_field_separator   = 'X'
+      TABLES
+        data_tab                = it_dwld
+*       fieldnames              = gt_fieldname
+      EXCEPTIONS
+        file_write_error        = 1
+        no_batch                = 2
+        gui_refuse_filetransfer = 3
+        invalid_type            = 4
+        no_authority            = 5
+        unknown_error           = 6
+        header_not_allowed      = 7
+        separator_not_allowed   = 8
+        filesize_not_allowed    = 9
+        header_too_long         = 10
+        dp_error_create         = 11
+        dp_error_send           = 12
+        dp_error_write          = 13
+        unknown_dp_error        = 14
+        access_denied           = 15
+        dp_out_of_memory        = 16
+        disk_full               = 17
+        dp_timeout              = 18
+        file_not_found          = 19
+        dataprovider_exception  = 20
+        control_flush_error     = 21
+        OTHERS                  = 22.
+
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ELSE.
+      CONCATENATE gv_file text-999 INTO gv_str SEPARATED BY space."
+      MESSAGE gv_str  TYPE 'S'.
+    ENDIF.
+  ELSE.
+    MESSAGE 'Operation Cancelled'(023) TYPE 'S'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+
 5. ALSM_EXCEL_TO_INTERNAL_TABLE. (for conversion of dates to internal table format use CONVERT_DATE_TO_INTERN_FORMAT
    while looping it_excelfile to wa_excelfile and then to internal table). 
+   
+   CALL FUNCTION 'ALSM_EXCEL_TO_INTERNAL_TABLE'
+    EXPORTING
+      filename                = p_file
+      i_begin_col             = 1
+      i_begin_row             = 2
+      i_end_col               = 10
+      i_end_row               = 65536
+    TABLES
+      intern                  = it_excelfile
+    EXCEPTIONS
+      inconsistent_parameters = 1
+      upload_ole              = 2
+      OTHERS                  = 3.
+  IF sy-subrc <> 0.
+    MESSAGE 'Select a file to upload!!!' TYPE 'S' DISPLAY LIKE 'W'.
+  ELSE.
 
 
 
