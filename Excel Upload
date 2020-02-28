@@ -1,0 +1,86 @@
+*&----------------------------------------------------------------------*
+*&-------------------ABAP coding for Excel Upload-----------------------*
+*&----------------------------------------------------------------------*
+*&----------------------------------------------------------------------*
+*&----------------------------------------------------------------------*                             
+*&----------------------------------------------------------------------*
+
+
+DATA : p_file TYPE rlgrap-filename,
+       it_excelfile TYPE alsmex_tabline,
+       wa_excelfile TYPE alsmex_tabline.
+       
+* The function modules to process the excel data to an internal table.
+
+
+
+1. AT SELECTION-SCREEN ON VALUE REQUEST FOR p_file.
+   cl_gui_frontend_services=>file_open_dialog. (CHANGING PARAMETERS -> gt_tab TYPE filetable and v_rc TYPE sy-subrc)
+   
+   CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      default_extension       = '.XLSX'
+      file_filter             = 'Microsoft Excel Files (*.XLS;*.XLSX;*.XLSM)|*.XLS;*.XLSX;*.XLSM|' ##NO_TEXT
+    CHANGING
+      file_table              = gt_tab
+      rc                      = v_rc
+    EXCEPTIONS
+      file_open_dialog_failed = 1
+      cntl_error              = 2
+      error_no_gui            = 3
+      not_supported_by_gui    = 4
+      OTHERS                  = 5.
+  IF sy-subrc = 0
+    AND gt_tab IS NOT INITIAL.
+    p_file = gt_tab[ 1 ].
+  ENDIF.
+  
+     
+2. F4_FILENAME.
+
+     CALL FUNCTION 'F4_FILENAME'
+      EXPORTING
+        program_name  = syst-cprog
+        dynpro_number = syst-dynnr
+        field_name    = 'P_FILE'
+      IMPORTING
+        file_name     = p_file.
+    IF sy-subrc IS NOT INITIAL.
+      MESSAGE : 'Enter Valid File Format' TYPE 'S' DISPLAY LIKE 'E'.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+
+3. cl_gui_frontend_services=>file_save_dialog.
+
+ IF sy-ucomm = 'FILE'.
+    CLEAR: gv_path,gv_filename.
+    gv_path = ' '.
+    CALL METHOD cl_gui_frontend_services=>file_save_dialog
+      EXPORTING
+        default_file_name         = gv_path
+      CHANGING
+        filename                  = gv_filename
+        path                      = gv_path
+        fullpath                  = gv_path
+      EXCEPTIONS
+        cntl_error                = 1
+        error_no_gui              = 2
+        not_supported_by_gui      = 3
+        invalid_default_file_name = 4
+        OTHERS                    = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    CONCATENATE gv_path gv_filename '.xls' INTO gv_file.
+    PERFORM get_fields.
+  ENDIF.
+
+
+4. GUI_DOWNLOAD.(Declare the fields which the excel needs to have ty_dwld , it_dwld - output of GUI_DOWNLOAD )
+
+5. ALSM_EXCEL_TO_INTERNAL_TABLE. (for conversion of dates to internal table format use CONVERT_DATE_TO_INTERN_FORMAT
+   while looping it_excelfile to wa_excelfile and then to internal table). 
+
+
+
