@@ -49,35 +49,9 @@ DATA : p_file TYPE rlgrap-filename,
       MESSAGE : 'Enter Valid File Format' TYPE 'S' DISPLAY LIKE 'E'.
       LEAVE LIST-PROCESSING.
     ENDIF.
+    
 
-3. cl_gui_frontend_services=>file_save_dialog.
-
- IF sy-ucomm = 'FILE'.
-    CLEAR: gv_path,gv_filename.
-    gv_path = ' '.
-    CALL METHOD cl_gui_frontend_services=>file_save_dialog
-      EXPORTING
-        default_file_name         = gv_path
-      CHANGING
-        filename                  = gv_filename
-        path                      = gv_path
-        fullpath                  = gv_path
-      EXCEPTIONS
-        cntl_error                = 1
-        error_no_gui              = 2
-        not_supported_by_gui      = 3
-        invalid_default_file_name = 4
-        OTHERS                    = 5.
-    IF sy-subrc <> 0.
-      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-    ENDIF.
-    CONCATENATE gv_path gv_filename '.xls' INTO gv_file.
-    PERFORM get_fields.
-  ENDIF.
-
-
-4. GUI_DOWNLOAD.(Declare the fields which the excel needs to have ty_dwld , it_dwld - output of GUI_DOWNLOAD )
+3. GUI_DOWNLOAD.(Declare the fields which the excel needs to have ty_dwld , it_dwld - output of GUI_DOWNLOAD )
 
 CALL FUNCTION 'GUI_DOWNLOAD'
       EXPORTING
@@ -114,14 +88,37 @@ CALL FUNCTION 'GUI_DOWNLOAD'
     IF sy-subrc <> 0.
       MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
       WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-    ELSE.
-      CONCATENATE gv_file text-999 INTO gv_str SEPARATED BY space."
-      MESSAGE gv_str  TYPE 'S'.
-    ENDIF.
-  ELSE.
     MESSAGE 'Operation Cancelled'(023) TYPE 'S'.
     LEAVE LIST-PROCESSING.
   ENDIF.
+
+4. cl_gui_frontend_services=>file_save_dialog.
+
+ IF sy-ucomm = 'FILE'.
+    CLEAR: gv_path,gv_filename.
+    gv_path = ' '.
+    CALL METHOD cl_gui_frontend_services=>file_save_dialog
+      EXPORTING
+        default_file_name         = gv_path
+      CHANGING
+        filename                  = gv_filename
+        path                      = gv_path
+        fullpath                  = gv_path
+      EXCEPTIONS
+        cntl_error                = 1
+        error_no_gui              = 2
+        not_supported_by_gui      = 3
+        invalid_default_file_name = 4
+        OTHERS                    = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    CONCATENATE gv_path gv_filename '.xls' INTO gv_file.
+    PERFORM get_fields.
+  ENDIF.
+
+
 
 
 5. ALSM_EXCEL_TO_INTERNAL_TABLE. (for conversion of dates to internal table format use CONVERT_DATE_TO_INTERN_FORMAT
