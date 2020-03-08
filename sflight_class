@@ -1,3 +1,4 @@
+*This a ABAP OO program to display flight data based on certain general guidelines.
 
 REPORT  z003_flights_class.
 
