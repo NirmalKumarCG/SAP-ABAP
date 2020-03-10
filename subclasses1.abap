@@ -2,7 +2,16 @@
 
 CLASS lcl_vehicle DEFINITION.
 
+PUBLIC SECTION.
 
+  METHODS gofaster.
 
+  METHODS writespeed.
+
+PROTECTED SECTION.
+
+  DATA : speed TYPE i.
+
+PRIVATE SECTION.
 
 ENDCLASS.
