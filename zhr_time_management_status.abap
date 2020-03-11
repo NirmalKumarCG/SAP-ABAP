@@ -1,6 +1,6 @@
 *This is a dialog program / Module Pool Program with a screen display of table control wizard which enables the user to 
- enter the time management status of the employer . Logic written for addition and deletion of rows. Created a save button
- to update the data into a database table .
+*enter the time management status of the employer . Logic written for addition and deletion of rows. Created a save button
+*to update the data into a database table .
 
 *&---------------------------------------------------------------------*
 *& Report  ZHR_TIME_STAT
@@ -56,8 +56,7 @@ ENDMODULE.
 *&---------------------------------------------------------------------*
 *&      Module  STATUS_9000  OUTPUT
 *&---------------------------------------------------------------------*
-*       text
-*----------------------------------------------------------------------*
+
 MODULE status_9000 OUTPUT.
   SET PF-STATUS 'ZHR_TIMESTAT_PF'.   "sets PF status for the result page .
   SET TITLEBAR 'ZHR_TIMESTAT_TITLE'. "sets title for the result
@@ -66,8 +65,7 @@ ENDMODULE.
 *&---------------------------------------------------------------------*
 *&      Module  SELECT_DATA  OUTPUT
 *&---------------------------------------------------------------------*
-*       text
-*----------------------------------------------------------------------*
+
 MODULE select_data OUTPUT.
   PERFORM get_data.
   IF gt_stat IS INITIAL .
@@ -99,8 +97,7 @@ ENDMODULE.
 *&---------------------------------------------------------------------*
 *&      Module  USER_COMMAND_9000  INPUT
 *&---------------------------------------------------------------------*
-*       text
-*----------------------------------------------------------------------*
+
 MODULE user_command_9000 INPUT.
 
   DATA flag1(1) TYPE c.
@@ -123,12 +120,7 @@ MODULE user_command_9000 INPUT.
       FREE gt_sta.
       DELETE gt_stat WHERE pernr IS INITIAL.
       IF gt_stat IS NOT INITIAL.
-*        GT_STA = VALUE #( LET LT_NEW = GT_STAT IN FOR WA IN LT_NEW ( PERNR = |{ WA-PERNR ALPHA = IN }|
-*                                                                     BEGDA = WA-BEGDA
-*                                                                     ENDDA = WA-ENDDA
-*                                                                     TMSTA = WA-TMSTA
-*                                                                     CHANGED_BY = WA-CHANGED_BY
-*                                                                     CHANGED_ON = WA-CHANGED_ON ) ).
+
         gt_sta = VALUE #( FOR wa1 IN gt_stat ( pernr = |{ wa1-pernr ALPHA = IN }|
                                                                      begda = wa1-begda
                                                                      endda = wa1-endda
@@ -168,11 +160,7 @@ ENDMODULE.
 *&---------------------------------------------------------------------*
 *&      Form  GET_DATA
 *&---------------------------------------------------------------------*
-*       text
-*----------------------------------------------------------------------*
-*  -->  p1        text
-*  <--  p2        text
-*----------------------------------------------------------------------*
+
 FORM delete.  "to delete the rows when flag = 'X'.
   FREE gt_sta.
   IF gt_stat IS NOT INITIAL.
@@ -205,8 +193,7 @@ ENDFORM.
 *&---------------------------------------------------------------------*
 *&     Form GET_DATA  OUTPUT
 *&---------------------------------------------------------------------*
-*       text
-*----------------------------------------------------------------------*
+
 FORM get_data.
   IF gt_stat IS INITIAL.
     SELECT * FROM zhr_time_stat
