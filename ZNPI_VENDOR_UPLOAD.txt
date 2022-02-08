@@ -1,0 +1,1700 @@
+************************************************************************
+* Program creates an Batch Input Session for upload of Vendor details  *
+* via transaction XK01.                                                *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 19/06/98 | Sathish Kumar.S      | Initial program         *
+************************************************************************
+REPORT  znpi_vendor_upload NO STANDARD PAGE HEADING
+                           LINE-SIZE  132
+                           LINE-COUNT 65(0).
+*----------------------------------------------------------------------*
+* Tables
+*----------------------------------------------------------------------*
+TABLES: lfb1,   "Vendor Master (Company Code)
+        lfm1,   "Vendor master record purchasing organization data
+        lfa1,   "Vendor Master (General Section)
+        lfbk,   "Vendor Master (Bank Details)
+        t024e,  "Purchasing Organizations
+        adr6,   "E-Mail Addresses (Business Address Services)
+        t077k,  "Vendor account groups
+        t001,   "Company Codes
+        t005u.  "Taxes: Region Key: Texts
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+
+* include programs for common processes in interface programs
+DATA  zzret_code LIKE sy-subrc.
+INCLUDE zbdcincl.
+
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS: p_r1 RADIOBUTTON GROUP rad USER-COMMAND clk DEFAULT 'X'.
+SELECTION-SCREEN COMMENT 5(35) text-003.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a
+                        DEFAULT 'c:\temp\parbcust.xls',
+            p_hed       AS CHECKBOX MODIF ID a,     " With header line? X or Y for yes
+            p_test      AS CHECKBOX MODIF ID a,     " test run? X or Y for yes
+            p_sess(12)  TYPE c      MODIF ID a,
+            p_mode                  MODIF ID a.
+PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS : p_r2 RADIOBUTTON GROUP rad.
+SELECTION-SCREEN COMMENT 5(35) text-004.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-002.
+
+PARAMETERS :   p_code  LIKE lfb1-bukrs MODIF ID b.     "Company Code
+PARAMETERS :   p_porg  LIKE lfm1-ekorg MODIF ID b.     "Purchasing Organization
+PARAMETERS :   p_pgrp  LIKE lfm1-ekgrp MODIF ID b.     "Purchasing Group
+SELECT-OPTIONS:s_vend  FOR  lfa1-lifnr MODIF ID b.     "Vendor Account Number
+SELECT-OPTIONS:s_date  FOR  lfa1-erdat MODIF ID b.     "Date on Which Record Was Created
+PARAMETERS :   p_dwl   LIKE rlgrap-filename MODIF ID b
+                            DEFAULT 'c:\temp\parbcust.xls'.
+SELECTION-SCREEN : END OF BLOCK 002.
+*End of mod 0002
+
+*----------------------------------------------------------------------*
+* Data Declaration
+*----------------------------------------------------------------------*
+* input file format (fixed width)
+DATA: BEGIN OF indata OCCURS 0,
+        bukrs         LIKE rf02k-bukrs,  "Company Code
+        ekorg         LIKE rf02k-ekorg,  "Purchasing group
+        ktokk         LIKE rf02k-ktokk,  "Customer account group
+*       Address
+        anred         LIKE lfa1-anred,   "Title
+        name1         LIKE lfa1-name1,                      "Name 1
+        sortl(20),"    LIKE LFA1-SORTL,   "Search term
+        name2         LIKE lfa1-name2,                      "Name 2
+        SUPPL2        LIKE ADRC-STR_SUPPL2,                 "Street 3
+        stras         LIKE lfa1-stras,   "Street and house number
+        ort01         LIKE lfa1-ort01,   "City
+*        regio         LIKE lfa1-regio,   "Region
+        regio         LIKE  T005U-BEZEI,  "Region
+        pstlz         LIKE lfa1-pstlz,   "Postal code
+        pfach         LIKE lfa1-pfach,   "Post office box
+*        pfort         LIKE lfa1-pfort,   "PO Box city
+*        ort02         LIKE lfa1-ort02,   "District
+*        pstl2         LIKE lfa1-pstl2,   "P.O. Box Postal Code
+        land1         LIKE lfa1-land1,   "Country key
+        txjcd         LIKE lfa1-txjcd,   "Tax Juridiction
+        telf1         LIKE lfa1-telf1,   "First telephone num
+        telfx         LIKE lfa1-telfx,   "Fax number
+        telf2         LIKE lfa1-telf2,   "Second telephone number
+        email(130),
+        stceg         LIKE lfa1-stceg,   "A.B.N.
+*       payment transactions
+         banks        LIKE lfbk-banks,   "Bank country key
+         bankl        LIKE lfbk-bankl,   "Bank key
+         bankn        LIKE lfbk-bankn,   "Bank account
+         bkont        LIKE lfbk-bkont,   "Bank control key
+         bvtyp        LIKE lfbk-bvtyp,   "Partner bank key
+         bkref        LIKE lfbk-bkref,   "Reference spec for bank
+         xezer(1)     TYPE c,    "Collection authorization
+*       accounting information
+         akont        LIKE lfb1-akont,   "Reconciliation acco
+         zuawa        LIKE lfb1-zuawa,   "Sort key
+         lnrze        LIKE lfb1-lnrze,   "Head office account
+         altkn        LIKE lfb1-altkn,   "Previous master record
+*       payment data
+         zterm        LIKE lfb1-zterm,   "Terms of payment key
+         reprf(1)     TYPE c,            "Check flag for dbl inv
+         zwels        LIKE lfb1-zwels,   "Payment method
+         zahls        LIKE lfb1-zahls,   "Payment block
+*       correspondence
+         eikto        LIKE lfb1-eikto,   "Acct no at vendor
+         zsabe        LIKE lfb1-zsabe,   "User at vendor
+         kverm        LIKE lfb1-kverm,   "Account memo
+*       purchasing data
+         waers        LIKE lfm1-waers,   "Order currency
+         zterm1       LIKE lfm1-zterm,   "Terms of payment
+         inco1        LIKE lfm1-inco1,   "Incoterms part 1
+         inco2        LIKE lfm1-inco2,   "Incoterms part 2
+         minbw(16)    TYPE c,    "Minimum order value
+         kalsk        LIKE lfm1-kalsk,   "Group for calc. scheme
+         meprf        LIKE lfm1-meprf,   "Pricing date control
+         verkf        LIKE lfm1-verkf,   "Salesperson at vendor
+         telf11       LIKE lfm1-telf1,   "Vendor's telephone no.
+         webre(1)     TYPE c,            "GR-based inv. verfctn
+         xersy(1)     TYPE c,            "Eval. receipt sett.
+         kzabs(1)     TYPE c,            "Aknowledgement reqd.
+         kzaut(1)     TYPE c,            "Automatic PO
+         lfabc        LIKE lfm1-lfabc,   "ABC indicator
+         expvz        LIKE lfm1-expvz,   "Mode of trnsprt-border
+         zolla        LIKE lfm1-zolla,   "Office of entry
+*       partner functions
+        wyt3_parvw    LIKE wyt3-parvw,   "Parnter function ID
+        wrf02k_gparn  LIKE wrf02k-gparn, "No. of business partner
+        wyt3_defpa(1) TYPE c,            "Default partner
+*        lfurl        TYPE lfa1-lfurl,
+      END OF indata.
+
+* Output file format when download option is used(fixed width)
+DATA: BEGIN OF outdata OCCURS 0,
+        lifnr         LIKE lfb1-lifnr,
+        bukrs         LIKE lfb1-bukrs,  "Company Code
+        ekorg         LIKE lfm1-ekorg,  "Purchasing group
+        ktokk         LIKE lfa1-ktokk,  "Customer account group
+*       Address
+        anred          LIKE lfa1-anred,   "Title
+        name1          LIKE lfa1-name1,                     "Name 1
+        sortl          LIKE lfa1-sortl,   "Search term
+        name2          LIKE lfa1-name2,                     "Name 2
+        SUPPL2         LIKE ADRC-STR_SUPPL2,                 "Street 3
+        stras          LIKE lfa1-stras,   "Street and house number
+        ort01          LIKE lfa1-ort01,   "City
+*        regio          LIKE lfa1-regio,   "Region
+        regio          LIKE T005U-BEZEI,   "Region
+        pstlz          LIKE lfa1-pstlz,   "Postal code
+        pfach          LIKE lfa1-pfach,   "Post office box
+*        pfort          LIKE lfa1-pfort,
+*        ort02          LIKE lfa1-ort02,
+*        pstl2          LIKE lfa1-pstl2,
+        land1          LIKE lfa1-land1,   "Country key
+        txjcd         LIKE lfa1-txjcd,   "Tax Juridiction
+        telf1          LIKE lfa1-telf1,   "First telephone num
+        telfx          LIKE lfa1-telfx,   "Fax number
+        telf2          LIKE lfa1-telf2,   "Second telephone number
+        email          LIKE adr6-smtp_addr,"EMAIL
+        stceg          LIKE lfa1-stceg,   "A.B.N.
+*       payment transactions
+        banks          LIKE lfbk-banks,   "Bank country key
+        bankl          LIKE lfbk-bankl,     "Bank key
+        bankn          LIKE lfbk-bankn,   "Bank account
+        bkont          LIKE lfbk-bkont,   "Bank control key
+        bvtyp          LIKE lfbk-bvtyp,   "Partner bank key
+        bkref          LIKE lfbk-bkref,   "Reference spec for bank
+        xezer          LIKE lfbk-xezer,   "Collection authorization
+*       accounting information
+        akont          LIKE lfb1-akont,   "Reconciliation acco
+        zuawa          LIKE lfb1-zuawa,   "Sort key
+        lnrze          LIKE lfb1-lnrze,   "Head office account
+        altkn          LIKE lfb1-altkn,   "Previous master record
+*       payment data
+        zterm          LIKE lfb1-zterm,   "Terms of payment key
+        reprf          LIKE lfb1-reprf,    "Check flag for dbl inv
+        zwels          LIKE lfb1-zwels,   "Payment method
+        zahls          LIKE lfb1-zahls,   "Payment block
+*       correspondence
+        eikto          LIKE lfb1-eikto,   "Acct no at vendor
+        zsabe          LIKE lfb1-zsabe,   "User at vendor
+        kverm          LIKE lfb1-kverm,   "Account memo
+*       purchasing data
+        waers          LIKE lfm1-waers,   "Order currency
+        zterm1         LIKE lfm1-zterm,   "Terms of payment
+        inco1          LIKE lfm1-inco1,   "Incoterms part 1
+        inco2          LIKE lfm1-inco2,   "Incoterms part 2
+        minbw          LIKE lfm1-minbw,    "Minimum order value
+        kalsk          LIKE lfm1-kalsk,   "Group for calc. scheme
+        meprf          LIKE lfm1-meprf,   "Pricing date control
+        verkf          LIKE lfm1-verkf,   "Salesperson at vendor
+        telf11         LIKE lfm1-telf1,   "Vendor's telephone no.
+        webre          LIKE lfm1-webre,    "GR-based inv. verfctn
+        xersy          LIKE lfm1-xersy,    "Eval. receipt sett.
+        kzabs          LIKE lfm1-kzabs,    "Aknowledgement reqd.
+        kzaut          LIKE lfm1-kzaut,    "Automatic PO
+        lfabc          LIKE lfm1-lfabc,   "ABC indicator
+        expvz          LIKE lfm1-expvz,   "Mode of trnsprt-border
+        zolla          LIKE lfm1-zolla,   "Office of entry
+*       partner functions
+        wyt3_parvw          LIKE wyt3-parvw,   "Parnter function ID
+        wrf02k_gparn        LIKE wrf02k-gparn, "No. of business partner
+        wyt3_defpa      LIKE wyt3-defpa,      "Default partner
+        adrnr       LIKE lfa1-adrnr,
+*        lfurl          TYPE lfa1-lfurl,
+      END OF outdata.
+*
+DATA: BEGIN OF t_outdata OCCURS 100,
+        bukrs(12),           "Company Code
+        ekorg(16),           "Purchasing group
+        ktokk(22),           "Customer account group
+*       Address
+        anred(15),           "Title
+        name1(35),                                          "Name 1
+        sortl(11),           "Search term
+        name2(35),                                          "Name 2
+        SUPPL2(40),          "Street 3
+        stras(35),           "Street and house number
+        ort01(35),           "City
+        regio(20),            "Region
+        pstlz(11),           "Postal code
+        pfach(15),           "Post office box
+*        pfort(35),           "PO Box city
+*        ort02(35),           "District
+*        pstl2(20),           "P.O. Box Postal Code
+        land1(11),           "Country key
+        txjcd(15),           "Tax Juridiction
+        telf1(16),           "First telephone num
+        telfx(31),           "Fax number
+        telf2(16),           "Second telephone number
+        email TYPE string,
+        stceg(20),           "A.B.N.
+*       payment transactions
+        banks(16),           "Bank country key
+        bankl(15),           "Bank key
+        bankn(18),           "Bank account
+        bkont(16),           "Bank control key
+        bvtyp(16),           "Partner bank key
+        bkref(23),           "Reference spec for bank
+        xezer(23),           "Collection authorization
+*       accounting information
+        akont(20),           "Reconciliation acco
+        zuawa(8),            "Sort key
+        lnrze(19),           "Head office account
+        altkn(22),           "Previous master record
+*       payment data
+        zterm(20),           "Terms of payment key
+        reprf(22)       TYPE c,    "Check flag for dbl inv
+        zwels(14),           "Payment method
+        zahls(13),           "Payment block
+*       correspondence
+        eikto(17),           "Acct no at vendor
+        zsabe(15),           "User at vendor
+        kverm(30),           "Account memo
+*       purchasing data
+        waers(14),           "Order currency
+        zterm1(16),          "Terms of payment
+        inco1(16),           "Incoterms part 1
+        inco2(28),           "Incoterms part 2
+        minbw(18),           "Minimum order value
+        kalsk(22),           "Group for calc. scheme
+        meprf(20),           "Pricing date control
+        verkf(30),           "Salesperson at vendor
+        telf11(21),          "Vendor's telephone no.
+        webre(21),           "GR-based inv. verfctn
+        xersy(18),           "Eval. receipt sett.
+        kzabs(20),           "Aknowledgement reqd.
+        kzaut(12),           "Automatic PO
+        lfabc(13),           "ABC indicator
+        expvz(22),           "Mode of trnsprt-border
+        zolla(15),           "Office of entry
+*       partner functions
+        wyt3_parvw(19),      "Parnter function ID
+        wrf02k_gparn(23),    "No. of business partner
+        wyt3_defpa(15)       TYPE c,    "Default partner
+*        lfurl          TYPE lfa1-lfurl,
+        desc     TYPE string,
+        lifnr(20),
+      END OF t_outdata.
+
+*Contains output datas to download
+DATA :BEGIN OF  t_rest  OCCURS 0.
+INCLUDE  STRUCTURE indata.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : lifnr TYPE lfb1-lifnr.
+DATA : END OF t_rest.
+
+DATA: BEGIN OF status_tab OCCURS 0,
+        status(10),
+        btc_sess(12)       TYPE c,
+        ven_no             LIKE lfa1-lifnr,
+        message(100),
+      END OF status_tab.
+
+*To store how much datas have read
+DATA: BEGIN OF tot,
+        ok                 TYPE i,
+        read               TYPE i,
+        err                TYPE i,
+      END OF tot.
+
+DATA:  w_upllen            TYPE i VALUE 2000,
+       err_msg(100)        TYPE c,
+       sap_venno           LIKE lfa1-lifnr,
+       batch_name(30)      TYPE c,
+       v_open.
+
+DATA: v_msgno LIKE sy-msgno.
+DATA: V_REGIO LIKE LFA1-REGIO.
+
+* format of the input file
+DATA: BEGIN OF inrec OCCURS 0,
+        filler(3000)        TYPE c,
+      END OF inrec.
+DATA: it_raw  TYPE truxs_t_text_data.
+
+* Constants
+CONSTANTS: c_trans(4)    VALUE 'XK01', " transaction used
+           delimiter(1)  VALUE ','.
+*Start of Mod002
+DATA : t_succ LIKE indata OCCURS 0 WITH HEADER LINE.
+DATA : t_err  LIKE indata OCCURS 0 WITH HEADER LINE.
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+DATA:  bank_details LIKE bapivendor_06 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c.
+*For recording
+DATA: v_code,
+      v_org,
+      v_grp,
+      v_all.
+
+*for downloads
+*Table to fetch datas with combination of general data's and company code
+DATA: BEGIN OF t_code OCCURS 0,
+        lifnr         LIKE lfa1-lifnr,  "vendor
+        ktokk         LIKE lfa1-ktokk,  "Customer account group
+*       Address
+        anred          LIKE lfa1-anred,   "Title
+        name1          LIKE lfa1-name1,                     "Name 1
+        sortl          LIKE lfa1-sortl,   "Search term
+        name2          LIKE lfa1-name2,                     "Name 2
+        stras          LIKE lfa1-stras,   "Street and house number
+        ort01          LIKE lfa1-ort01,   "City
+        regio          LIKE lfa1-regio,   "Region
+        pstlz          LIKE lfa1-pstlz,   "Postal code
+        pfach          LIKE lfa1-pfach,   "Post office box
+        pfort          LIKE lfa1-pfort,
+        ort02          LIKE lfa1-ort02,
+        pstl2          LIKE lfa1-pstl2,
+        land1          LIKE lfa1-land1,   "Country key
+        telf1          LIKE lfa1-telf1,   "First telephone num
+        telfx          LIKE lfa1-telfx,   "Fax number
+        telf2          LIKE lfa1-telf2,   "Second telephone number
+        email          LIKE adr6-smtp_addr,"EMAIL
+        stceg          LIKE lfa1-stceg,   "A.B.N.
+        adrnr          LIKE lfa1-adrnr,
+*        lifnr         like lfb1-lifnr,  "vendor
+*       accounting information
+        bukrs         LIKE lfb1-bukrs,  "Company Code
+        akont          LIKE lfb1-akont,   "Reconciliation acco
+        zuawa          LIKE lfb1-zuawa,   "Sort key
+        lnrze          LIKE lfb1-lnrze,   "Head office account
+        altkn          LIKE lfb1-altkn,   "Previous master record
+*       payment data
+        zterm          LIKE lfb1-zterm,   "Terms of payment key
+        reprf          LIKE lfb1-reprf,    "Check flag for dbl inv
+        zwels          LIKE lfb1-zwels,   "Payment method
+        zahls          LIKE lfb1-zahls,   "Payment block
+*       correspondence
+        eikto          LIKE lfb1-eikto,   "Acct no at vendor
+        zsabe          LIKE lfb1-zsabe,   "User at vendor
+        kverm          LIKE lfb1-kverm,   "Account memo
+*       purchasing data
+
+      END OF t_code.
+
+DATA: BEGIN OF t_purc OCCURS 0,
+        lifnr         LIKE lfm1-lifnr,  "vendor
+        ekorg         LIKE lfm1-ekorg,  "Purchasing group
+        waers          LIKE lfm1-waers,   "Order currency
+        zterm1         LIKE lfm1-zterm,   "Terms of payment
+        inco1          LIKE lfm1-inco1,   "Incoterms part 1
+        inco2          LIKE lfm1-inco2,   "Incoterms part 2
+        minbw          LIKE lfm1-minbw,    "Minimum order value
+        kalsk          LIKE lfm1-kalsk,   "Group for calc. scheme
+        meprf          LIKE lfm1-meprf,   "Pricing date control
+        verkf          LIKE lfm1-verkf,   "Salesperson at vendor
+        telf11         LIKE lfm1-telf1,   "Vendor's telephone no.
+        webre          LIKE lfm1-webre,    "GR-based inv. verfctn
+        xersy          LIKE lfm1-xersy,    "Eval. receipt sett.
+        kzabs          LIKE lfm1-kzabs,    "Aknowledgement reqd.
+        kzaut          LIKE lfm1-kzaut,    "Automatic PO
+        lfabc          LIKE lfm1-lfabc,   "ABC indicator
+        expvz          LIKE lfm1-expvz,   "Mode of trnsprt-border
+        zolla          LIKE lfm1-zolla,   "Office of entry
+      END OF t_purc.
+
+DATA: BEGIN OF t_bank OCCURS 0,
+        lifnr         LIKE lfbk-lifnr,  "vendor
+*       payment transactions
+        banks          LIKE lfbk-banks,   "Bank country key
+        bankl          LIKE lfbk-bankl,     "Bank key
+        bankn          LIKE lfbk-bankn,   "Bank account
+        bkont          LIKE lfbk-bkont,   "Bank control key
+        bvtyp          LIKE lfbk-bvtyp,   "Partner bank key
+        bkref          LIKE lfbk-bkref,   "Reference spec for bank
+        xezer          LIKE lfbk-xezer,   "Collection authorization
+      END OF t_bank.
+
+*----------------------------------------------------------------------*
+* Ranges
+*----------------------------------------------------------------------*
+RANGES: s_pgrp   FOR lfm1-ekgrp.
+RANGES: s_porg   FOR lfm1-ekorg.
+
+*End of Mod002
+*----------------------------------------------------------------------*
+* At Selection-Screen for Upload and Download Options
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+
+  LOOP AT SCREEN.
+    IF p_r1 = 'X'.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r2 = 'X'.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*----------------------------------------------------------------------*
+* At Selection-Screen for upload and download file
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+*Perform to get file name
+  PERFORM 100_file_name.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+*  Perform to get file name
+  PERFORM 110_file_name.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_dwl.
+*  Perform to get file name
+  PERFORM 120_file_name.
+
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+  IF p_r1 = 'X'.
+    IF p_sess IS INITIAL.
+      MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+
+    IF p_mode IS INITIAL.
+      MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    PERFORM upload_function.
+  ELSE.
+
+    IF p_dwl IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    PERFORM download_function.
+    PERFORM download_data.
+  ENDIF.
+
+  IF p_r1 EQ 'X'.
+    WRITE: /01      text-001 ,
+            22        ':',
+            23      sy-repid,
+*          92      text-001,
+            92      sy-pagno,
+           /01      text-003,
+            10      'by',
+            22      ':',
+            23      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    WRITE: /01     text-005,
+            25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+    ULINE.
+    SKIP 2.
+    WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+    IF p_test IS INITIAL.
+      WRITE: / 'TOTAL VENDORS CREATED',    28 tot-ok.
+      WRITE: / 'TOTAL VENDORS IN ERROR',   28 tot-err.
+    ELSE.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL RECORDS SUCCESS',    28 tot-ok.
+      WRITE: / 'TOTAL RECORDS ERROR',   28 tot-err.
+    ENDIF.
+  ELSE.
+    WRITE: /01      text-002,
+            22       ':',
+            23      sy-repid,
+*          80      text-001,
+            92      sy-pagno,
+           /01      text-004,
+            10      'by',
+            22      ':',
+            23      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    IF v_flag NE 'X'.
+      IF t_outdata[] IS NOT INITIAL.
+        WRITE : /01 'Successfully Download'.
+        WRITE: /01     text-005,
+                30     p_dwl.
+      ELSE.
+        WRITE : /01 'No Record to Process'.
+      ENDIF.
+      SKIP 1.
+    ELSE.
+      CLEAR v_flag.
+      WRITE : /01 'Error in Downloading the File'.
+    ENDIF.
+
+    ULINE.
+    SKIP 1.
+  ENDIF.
+*----------------------------------------------------------------------*
+*  End Of Selection
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+
+  IF p_r1 = 'X' AND t_rest[] IS NOT INITIAL.
+    SORT t_rest BY sort.
+    READ TABLE t_rest INDEX 1.
+    IF t_rest-sort = 'A'.
+      CLEAR : t_rest.
+      t_rest-bukrs = 'Success'.
+      INSERT t_rest INTO t_rest INDEX 1.
+    ENDIF.
+
+    READ TABLE t_rest WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_rest.
+      t_rest-bukrs = 'Errors'.
+      INSERT t_rest INTO t_rest INDEX g_init.
+      g_init = g_init - 1.
+
+      IF g_init IS NOT INITIAL.
+        g_init = g_init + 1.
+        INSERT INITIAL LINE INTO  t_rest INDEX g_init.
+      ENDIF.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+**Success Download
+*    PERFORM success_download.
+*  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  100_FILE_NAME
+*&---------------------------------------------------------------------*
+*        To get file name for upload file at selection screen
+*----------------------------------------------------------------------*
+FORM 100_file_name .
+
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_upl.
+ENDFORM.                    " 100_FILE_NAME
+*&---------------------------------------------------------------------*
+*&      Form  110_FILE_NAME
+*&---------------------------------------------------------------------*
+*      To get file name for success/Error file at selection screen
+*----------------------------------------------------------------------*
+FORM 110_file_name .
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_rest.
+ENDFORM.                    " 110_FILE_NAME
+*&---------------------------------------------------------------------*
+*&      Form  120_FILE_NAME
+*&---------------------------------------------------------------------*
+*       To get file name for download file at selection screen
+*----------------------------------------------------------------------*
+FORM 120_file_name .
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_dwl.
+ENDFORM.                    " 120_FILE_NAME
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_INPUT_FILE
+*&---------------------------------------------------------------------*
+*       To upload input File
+*----------------------------------------------------------------------*
+FORM upload_input_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      i_line_header        = p_hed
+      i_tab_raw_data       = it_raw
+      i_filename           = p_upl
+    TABLES
+      i_tab_converted_data = indata.
+
+ENDFORM.                    " UPLOAD_INPUT_FILE
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_VENDOR
+*&---------------------------------------------------------------------*
+*      Create the vendors based on the data from the input file.
+*----------------------------------------------------------------------*
+FORM create_vendor .
+  CLEAR: err_msg,
+         batch_name,
+         messtab,
+         messtab[],
+         t_rest.
+  PERFORM do_xk01_by_calltran
+                     TABLES indata
+                     USING  p_mode        "Show errors only
+                            err_msg
+                            batch_name
+                            sap_venno.
+*  PERFORM get_status.
+ENDFORM.                    " CREATE_VENDOR
+*&---------------------------------------------------------------------*
+*&      Form  DO_XK01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*      Fill the appropriate screens for the transaction and            *
+*       Call transaction XK01 (create vendor master).                  *
+*----------------------------------------------------------------------*
+FORM do_xk01_by_calltran  TABLES   indata STRUCTURE indata
+                          USING    tran_mode  TYPE c
+                                   err_msg    TYPE c
+                                   batch_mode TYPE c
+                                   sap_venno  LIKE lfa1-lifnr.
+  CLEAR: v_code,
+         v_grp,
+         v_org,
+         v_all,
+         t_rest.
+
+  IF indata-bukrs IS NOT INITIAL AND indata-ekorg IS NOT INITIAL.
+    v_all = 'X'.
+  ELSEIF indata-bukrs IS INITIAL AND indata-ekorg IS NOT INITIAL.
+    v_org = 'X'.
+  ELSEIF indata-bukrs IS NOT INITIAL AND indata-ekorg IS INITIAL.
+    v_code = 'X'.
+  ELSEIF  indata-bukrs IS INITIAL AND indata-ekorg IS INITIAL.
+    v_grp = 'X'.
+  ENDIF.
+
+  PERFORM process_screen_100.
+  PERFORM process_screen_110.
+  PERFORM process_screen_120.
+  PERFORM process_screen_130.
+  PERFORM process_screen_210.
+
+  IF v_code = 'X' OR v_all = 'X'.
+    PERFORM process_screen_215.
+    PERFORM process_screen_220.
+"Perform added on program on 19-02-2009 as with-holding tax screen was configured
+    PERFORM process_screen_610.
+  ENDIF.
+
+  IF v_org = 'X' OR v_all = 'X'.
+    PERFORM process_screen_310.
+    PERFORM process_screen_320.
+  ENDIF.
+
+  PERFORM insert_post_code.
+  CALL TRANSACTION 'XK01' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+  IF sy-subrc NE 0.
+    zzret_code = sy-subrc.
+    IF v_open NE 'X'.
+      PERFORM bdc_open_group USING p_sess.
+      v_open = 'X'.
+    ENDIF.
+    PERFORM bdc_insert USING 'XK01'.
+  ELSE.
+    zzret_code = 0.
+  ENDIF.
+  IF zzret_code = 0.
+    t_rest-lifnr = sy-msgv1.
+  ELSE.
+    CLEAR sap_venno.
+  ENDIF.
+*Start of Mod002
+  READ TABLE messtab WITH  KEY msgtyp = 'E'.
+  IF sy-subrc =  0.
+    ADD 1 TO tot-err.
+*Error File
+    MOVE-CORRESPONDING indata TO t_rest .
+    t_rest-sort = 'B'.
+*Get the Error details
+    PERFORM format_message.
+    APPEND t_rest.
+  ELSE.
+    ADD 1 TO tot-ok.
+*Success Message
+    MOVE-CORRESPONDING indata TO t_rest.
+    t_rest-sort = 'A'.
+    APPEND t_rest.
+  ENDIF.
+  REFRESH bdcdata.
+ENDFORM.                    " DO_XK01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*       This is the initial screen of XK01 - where company code,       *
+*       purchasing organization and account group must be filled in.   *
+*----------------------------------------------------------------------*
+FORM process_screen_100 .
+
+  PERFORM bdc_dynpro USING 'SAPMF02K'    '0100'.
+  PERFORM: bdc_field USING 'RF02K-BUKRS' indata-bukrs,
+           bdc_field USING 'RF02K-EKORG' indata-ekorg,
+           bdc_field USING 'RF02K-KTOKK' indata-ktokk,
+           bdc_field USING 'USE_ZAV'     'X',
+           bdc_field USING 'BDC_OKCODE'  '/00'.    "Continue
+ENDFORM.                    " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*       This is the Address details screen consisting of:              *
+*       the vendor's name, address, phone number, etc.                 *
+*----------------------------------------------------------------------*
+FORM process_screen_110 .
+  DATA: T_REGIO LIKE T005U OCCURS 0 WITH HEADER LINE.
+  DATA: l_pstlz(4) TYPE n,
+        l_pstlz1(6) TYPE n,
+        l_pstlz2(5) TYPE n.
+
+  TRANSLATE indata-land1 TO UPPER CASE.
+  TRANSLATE indata-regio TO UPPER CASE.
+
+  IF  indata-pstlz CO '0123456789 '.
+
+   if indata-land1 eq 'AU' or indata-land1 eq 'CH'.
+    l_pstlz = indata-pstlz.
+    indata-pstlz = l_pstlz.
+   endif.
+
+   if  indata-land1 eq 'IN' or indata-land1 eq 'SG' or indata-land1 eq 'CN'.
+    l_pstlz1 = indata-pstlz.
+    indata-pstlz = l_pstlz1.
+   ENDIF.
+
+
+   if  indata-land1 eq 'DE' or indata-land1 eq 'FR'.
+    l_pstlz2 = indata-pstlz.
+    indata-pstlz = l_pstlz2.
+   ENDIF.
+
+  ENDIF.
+
+  select BLAND BEZEI from t005u
+                     into corresponding fields of table t_regio
+                    where land1 = indata-land1.
+  loop at t_regio.
+    TRANSLATE t_regio-bezei TO UPPER CASE.
+    if t_regio-bezei = indata-regio.
+       V_regio = t_regio-bland.
+       exit.
+    endif.
+  endloop.
+
+  PERFORM bdc_dynpro USING 'SAPMF02K'               '0111'.
+  PERFORM bdc_field  USING 'BDC_OKCODE'             '/00'.
+  PERFORM bdc_field  USING 'BDC_CURSOR'             'SZA1_D0100-SMTP_ADDR'.
+  PERFORM bdc_field  USING 'SZA1_D0100-TITLE_MEDI'  indata-anred.
+  PERFORM bdc_field  USING 'ADDR1_DATA-NAME1'       indata-name1.
+  PERFORM bdc_field  USING 'ADDR1_DATA-NAME2'       indata-name2.
+  PERFORM bdc_field  USING 'ADDR1_DATA-SORT1'       indata-sortl.
+  PERFORM bdc_field  USING 'ADDR1_DATA-STREET'      indata-stras.
+  PERFORM bdc_field  USING 'ADDR1_DATA-POST_CODE1'  indata-pstlz.
+  PERFORM bdc_field  USING 'ADDR1_DATA-CITY1'       indata-ort01.
+  PERFORM bdc_field  USING 'ADDR1_DATA-COUNTRY'     indata-land1.
+  PERFORM bdc_field  USING 'ADDR1_DATA-REGION'      V_regio.
+  PERFORM bdc_field  USING 'ADDR1_DATA-PO_BOX'      indata-pfach.
+  PERFORM bdc_field  USING 'ADDR1_DATA-STR_SUPPL2'  indata-suppl2.
+  PERFORM bdc_field  USING 'ADDR1_DATA-TAXJURCODE'  indata-txjcd.
+*  PERFORM bdc_field  USING 'ADDR1_DATA-POST_CODE2'  indata-pstl2.
+*  PERFORM bdc_field  USING 'ADDR1_DATA-PO_BOX_LOC'  indata-pfort.
+*  PERFORM bdc_field  USING 'ADDR1_DATA-CITY2'       indata-ort02.
+  PERFORM bdc_field  USING 'ADDR1_DATA-LANGU'       'EN'.
+  PERFORM bdc_field  USING 'SZA1_D0100-TEL_NUMBER'  indata-telf1.
+  PERFORM bdc_field  USING 'SZA1_D0100-MOB_NUMBER'  indata-telf2.
+  PERFORM bdc_field  USING 'SZA1_D0100-FAX_NUMBER'  indata-telfx.
+  PERFORM bdc_field  USING 'SZA1_D0100-SMTP_ADDR'   indata-email.
+  clear v_regio.
+ENDFORM.                    " PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_120
+*&---------------------------------------------------------------------*
+*       This is the Control Data screen which consists of:             *
+*       A.B.N.                                                         *
+*----------------------------------------------------------------------*
+FORM process_screen_120 .
+  CONDENSE indata-stceg NO-GAPS.
+  PERFORM bdc_dynpro USING 'SAPMF02K'   '0120'.
+  PERFORM: bdc_field USING 'LFA1-STCEG' indata-stceg.
+  PERFORM  bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                    " PROCESS_SCREEN_120
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_130                                       *
+*&---------------------------------------------------------------------*
+*       This is the Payment Transactions screen which consists of:     *
+*       bank details, alternative payee etc.                           *
+*----------------------------------------------------------------------*
+FORM process_screen_130.
+  PERFORM bdc_dynpro USING 'SAPMF02K'    '0130'.
+  IF indata-banks NE space.
+    PERFORM: bdc_field USING 'LFBK-BANKS(01)' indata-banks,
+             bdc_field USING 'LFBK-BANKL(01)' indata-bankl,
+             bdc_field USING 'LFBK-BANKN(01)' indata-bankn,
+             bdc_field USING 'LFBK-BKONT(01)' indata-bkont,
+             bdc_field USING 'LFBK-BVTYP(01)' indata-bvtyp,
+             bdc_field USING 'LFBK-BKREF(01)' indata-bkref,
+             bdc_field USING 'LFBK-XEZER(01)' indata-xezer.
+  ENDIF.
+  PERFORM  bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_130
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_210                                       *
+*&---------------------------------------------------------------------*
+*       This is the Accounting information screen which consists of:   *
+*       reconciliation account number, head office account number,     *
+*       sort key, withholding tax info, and previous account number.   *
+*----------------------------------------------------------------------*
+FORM process_screen_210.
+
+  DATA: l_zuawa(3) TYPE n.
+
+  IF indata-zuawa is not initial.
+  IF indata-zuawa CO '0123456789 '.
+    l_zuawa = indata-zuawa.
+    indata-zuawa = l_zuawa.
+  ENDIF.
+  ENDIF.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = indata-akont
+    IMPORTING
+      output = indata-akont.
+
+  IF v_grp = 'X'.
+  PERFORM: bdc_dynpro USING 'SAPMF02K'    '0380',
+  bdc_field  USING 'BDC_OKCODE' '/00'.    "Continue
+  ENDIF.
+
+  IF v_code = 'X' OR v_all = 'X'.
+    PERFORM  bdc_dynpro USING 'SAPMF02K'    '0210'.
+    PERFORM: bdc_field USING 'LFB1-AKONT'  indata-akont,
+             bdc_field USING 'LFB1-ZUAWA'  indata-zuawa,
+             bdc_field USING 'LFB1-ALTKN'  indata-altkn,
+             bdc_field  USING 'BDC_OKCODE' '/00'.    "Continue
+  ENDIF.
+ENDFORM.                               " PROCESS_SCREEN_210
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_215                                       *
+*&---------------------------------------------------------------------*
+*       This screen consists of: terms of payment key, check flag for  *
+*       double invoices, payment method, alternative payee etc.        *
+*----------------------------------------------------------------------*
+FORM process_screen_215.
+  DATA: l_zterm(4) TYPE n.
+
+  IF indata-zterm is not initial.
+  IF indata-zterm CO '0123456789 '.
+    l_zterm = indata-zterm.
+    indata-zterm = l_zterm.
+  ENDIF.
+  ENDIF.
+
+  PERFORM bdc_dynpro USING 'SAPMF02K'    '0215'.
+  PERFORM: bdc_field USING 'LFB1-ZTERM' indata-zterm,
+           bdc_field USING 'LFB1-REPRF' indata-reprf,
+           bdc_field USING 'LFB1-ZWELS' indata-zwels,
+           bdc_field USING 'LFB1-ZAHLS' indata-zahls,
+           bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_215
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_220                                       *
+*&---------------------------------------------------------------------*
+*       This is the Correspondence screen which consists of:           *
+*       accounting clerk, our acct no. at vendor, user at vendor, etc. *
+*----------------------------------------------------------------------*
+FORM process_screen_220.
+  PERFORM bdc_dynpro USING 'SAPMF02K'   '0220'.
+  PERFORM: bdc_field USING 'LFB1-EIKTO' indata-eikto,
+           bdc_field USING 'LFB1-ZSABE' indata-zsabe,
+           bdc_field USING 'LFB1-KVERM' indata-kverm,
+           bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_220
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_610                                      *
+*&---------------------------------------------------------------------*
+*       This is the Correspondence screen which consists of:           *
+*       With-Holding Tax                                               *
+*----------------------------------------------------------------------*
+FORM process_screen_610.
+  PERFORM bdc_dynpro USING 'SAPMF02K'   '0610'.
+  PERFORM bdc_field  USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_610
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_310                                       *
+*&---------------------------------------------------------------------*
+*       This is the Purchasing Data screen which consists of:          *
+*       purchase order currency, terms of payment, incoterms etc.      *
+*----------------------------------------------------------------------*
+FORM process_screen_310.
+  DATA: l_zterm(4) TYPE n.
+  IF indata-zterm is not initial.
+  IF indata-zterm CO '0123456789 '.
+    l_zterm = indata-zterm.
+    indata-zterm = l_zterm.
+  ENDIF.
+  ENDIF.
+
+  PERFORM bdc_dynpro USING 'SAPMF02K'    '0310'.
+  PERFORM: bdc_field USING 'LFM1-WAERS' indata-waers,
+           bdc_field USING 'LFM1-ZTERM' indata-zterm,
+           bdc_field USING 'LFM1-INCO1' indata-inco1,
+           bdc_field USING 'LFM1-INCO2' indata-inco2,
+           bdc_field USING 'LFM1-MINBW' indata-minbw.
+  if  indata-land1 NE 'IN'.
+  PERFORM  bdc_field USING 'LFM1-KALSK' '01'."indata-kalsk.
+  endif.
+
+  PERFORM: bdc_field USING 'LFM1-MEPRF' indata-meprf,
+           bdc_field USING 'LFM1-VERKF' indata-verkf,
+           bdc_field USING 'LFM1-TELF1' indata-telf1,
+           bdc_field USING 'LFM1-WEBRE' indata-webre,
+           bdc_field USING 'LFM1-XERSY' indata-xersy,
+           bdc_field USING 'LFM1-KZABS' indata-kzabs,
+           bdc_field USING 'LFM1-KZAUT' indata-kzaut,
+           bdc_field USING 'LFM1-LFABC' indata-lfabc,
+           bdc_field USING 'LFM1-EXPVZ' indata-expvz,
+           bdc_field USING 'LFM1-ZOLLA' indata-zolla,
+           bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_310
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_320                                       *
+*&---------------------------------------------------------------------*
+*       This is the Partner Functions screen which consists of:        *
+*       partner function ID, no. of business partner etc.              *
+*----------------------------------------------------------------------*
+FORM process_screen_320.
+  PERFORM bdc_dynpro USING 'SAPMF02K'    '0320'.
+  IF indata-wyt3_parvw NE space.                            " 0001
+    PERFORM: bdc_field USING 'WYT3-PARVW(01)'   indata-wyt3_parvw.
+    PERFORM: bdc_field USING 'WRF02K-GPARN(01)' indata-wrf02k_gparn.
+    PERFORM: bdc_field USING 'WYT3-DEFPA(01)'   indata-wyt3_defpa.
+  ENDIF.                                                    " 0001
+ENDFORM.                               " PROCESS_SCREEN_320.
+*&---------------------------------------------------------------------*
+*&      Form  INSERT_POST_CODE
+*&---------------------------------------------------------------------*
+*       Save and post the transaction.
+*----------------------------------------------------------------------*
+FORM insert_post_code .
+  PERFORM bdc_field  USING 'BDC_OKCODE' 'UPDA'.  "Save
+ENDFORM.                    " INSERT_POST_CODE
+*&---------------------------------------------------------------------*
+*&      Form  GET_STATUS
+*&---------------------------------------------------------------------*
+*       Get the status of the transactions that were called.
+*----------------------------------------------------------------------*
+FORM get_status .
+  CLEAR status_tab.
+  IF zzret_code = 0.
+    ADD 1 TO tot-ok.
+    status_tab-status   = 'Succeed'.
+    status_tab-btc_sess = batch_name.
+    status_tab-ven_no   = sap_venno.
+    status_tab-message  = err_msg.
+  ELSE.
+    ADD 1 TO tot-err.
+    status_tab-status   = 'Failed'.
+    status_tab-btc_sess = batch_name.
+    status_tab-message  = err_msg.
+  ENDIF.
+  APPEND status_tab.
+ENDFORM.                    " GET_STATUS
+*&---------------------------------------------------------------------*
+*&      Form  PRINT_STATUS_REPORT
+*&---------------------------------------------------------------------*
+*       Print the status report and a summary listing.
+*----------------------------------------------------------------------*
+FORM print_status_report .
+  LOOP AT status_tab.
+    WRITE: /    status_tab-status,
+             10 status_tab-btc_sess,
+             25 status_tab-ven_no,
+             40 status_tab-message.
+  ENDLOOP.
+
+  IF p_test IS INITIAL.
+  ELSE.
+    LOOP AT indata.
+      WRITE: / indata-bukrs,
+               indata-ekorg,
+               indata-ktokk,
+               indata-name1.
+    ENDLOOP.
+  ENDIF.
+
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+  WRITE: / 'TOTAL VENDORS CREATED',      28 tot-ok.
+  WRITE: / 'TOTAL VENDORS IN ERROR',     28 tot-err.
+ENDFORM.                    " PRINT_STATUS_REPORT
+*&---------------------------------------------------------------------*
+*&      Form  PARAMETER_TO_RANGES
+*&---------------------------------------------------------------------*
+*       Assign Parameters to Ranges
+*----------------------------------------------------------------------*
+FORM parameter_to_ranges .
+
+  IF NOT p_pgrp IS INITIAL.
+    s_pgrp-low    = p_pgrp.
+    s_pgrp-sign   = 'I'.
+    s_pgrp-option = 'EQ'.
+    APPEND s_pgrp.
+  ENDIF.
+
+  IF NOT p_porg IS INITIAL.
+    s_porg-low    = p_porg.
+    s_porg-sign   = 'I'.
+    s_porg-option = 'EQ'.
+    APPEND s_porg.
+  ENDIF.
+ENDFORM.                    " PARAMETER_TO_RANGES
+*&---------------------------------------------------------------------*
+*&      Form  BANK_DETAILS
+*&---------------------------------------------------------------------*
+*       To get bank details of the vendor
+*----------------------------------------------------------------------*
+FORM bank_details .
+  LOOP AT outdata.
+    SELECT SINGLE smtp_addr FROM adr6
+                            INTO adr6-smtp_addr
+                           WHERE addrnumber = outdata-adrnr.
+    IF sy-subrc = 0.
+      outdata-email = adr6-smtp_addr.
+      MODIFY outdata TRANSPORTING  email.
+    ENDIF.
+
+    CALL FUNCTION 'BAPI_VENDOR_GETDETAIL'
+      EXPORTING
+        vendorno            = outdata-lifnr
+       companycode         = outdata-bukrs
+*          IMPORTING
+*            GENERALDETAIL       =
+*            COMPANYDETAIL       =
+*            RETURN              =
+     TABLES
+       bankdetail          = bank_details.
+    IF sy-subrc = 0 AND bank_details[] IS NOT INITIAL.
+      READ TABLE bank_details INDEX 1.
+      outdata-banks = bank_details-bank_ctry.
+      outdata-bankl = bank_details-bank_key.
+      outdata-bankn = bank_details-bank_acct.
+      outdata-bkont = bank_details-ctrl_key.
+      outdata-bvtyp = bank_details-partner_bk.
+      outdata-bkref = bank_details-bank_ref.
+      MODIFY outdata TRANSPORTING    banks
+                                     bankl
+                                     bankn
+                                     bkont
+                                     bvtyp
+                                     bkref.
+
+    ENDIF.
+    MOVE-CORRESPONDING outdata TO t_outdata.
+    APPEND t_outdata.
+    CLEAR: bank_details,
+           outdata.
+  ENDLOOP.
+ENDFORM.                    " BANK_DETAILS
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FUNCTION
+*&---------------------------------------------------------------------*
+*       To do the bdc recording
+*----------------------------------------------------------------------*
+FORM upload_function .
+
+  PERFORM upload_input_file.
+
+  IF indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+  ENDIF.
+*Validation of Fields before uploading
+  PERFORM field_validation.
+  IF p_test IS INITIAL.
+    LOOP AT indata.
+      PERFORM create_vendor.
+    ENDLOOP.
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " UPLOAD_FUNCTION
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_FUNCTION
+*&---------------------------------------------------------------------*
+*       To fetch datas when download radio button is selected
+*----------------------------------------------------------------------*
+FORM download_function .
+  PERFORM parameter_to_ranges.
+  IF p_code IS INITIAL.
+    SELECT a~lifnr a~ktokk
+           a~anred a~name1
+           a~sortl a~name2
+           a~stras a~ort01
+           a~regio a~pstlz
+           a~pfach a~pfort
+           a~ort02 a~pstl2
+           a~land1 a~telf1
+           a~telfx a~telf2
+           a~adrnr a~stceg
+           b~bukrs b~akont
+           b~zuawa b~lnrze
+           b~altkn b~zterm
+           b~reprf b~zwels
+           b~zahls b~eikto
+           b~zsabe b~kverm
+           FROM lfa1 AS a
+           LEFT OUTER JOIN lfb1 AS b ON a~lifnr = b~lifnr
+           INTO CORRESPONDING FIELDS OF TABLE t_code
+          WHERE a~erdat IN s_date
+           AND  a~lifnr IN s_vend.
+    IF sy-subrc = 0.
+      SELECT * FROM lfm1 INTO CORRESPONDING FIELDS OF  t_purc
+                         FOR ALL ENTRIES IN t_code
+                         WHERE lifnr = t_code-lifnr
+                         AND   ekorg IN s_porg
+                         AND   ekgrp IN s_pgrp.
+        PERFORM fetch_purc_org.
+      ENDSELECT.
+    ENDIF.
+
+  ELSE.
+    SELECT b~lifnr b~ktokk
+           b~anred b~name1
+           b~sortl b~name2
+           b~stras b~ort01
+           b~regio b~pstlz
+           b~pfach b~pfort
+           b~ort02 b~pstl2
+           b~land1 b~telf1
+           b~telfx b~telf2
+           b~adrnr b~stceg
+           a~bukrs a~akont
+           a~zuawa a~lnrze
+           a~altkn a~zterm
+           a~reprf a~zwels
+           a~zahls a~eikto
+           a~zsabe a~kverm
+           FROM lfb1 AS a
+           INNER JOIN lfa1 AS b ON a~lifnr = b~lifnr
+           INTO CORRESPONDING FIELDS OF TABLE t_code"outdata
+          WHERE a~bukrs = p_code
+           AND  a~erdat IN s_date
+           AND  a~lifnr IN s_vend.
+
+    IF sy-subrc = 0.
+      SELECT * FROM lfm1 INTO CORRESPONDING FIELDS OF  t_purc
+                         FOR ALL ENTRIES IN t_code"OUTDATA
+                         WHERE lifnr = t_code-lifnr
+                         AND   ekorg IN s_porg
+                         AND   ekgrp IN s_pgrp.
+        PERFORM fetch_purc_org.
+      ENDSELECT.
+    ENDIF.
+  ENDIF.
+
+*To fetch data which are in only general datas
+  IF t_code[] IS NOT INITIAL AND p_pgrp IS INITIAL
+                             AND p_porg IS INITIAL.
+    LOOP AT t_code.
+      PERFORM fetch_gen_details.
+    ENDLOOP.
+  ENDIF.
+
+ENDFORM.                    " DOWNLOAD_FUNCTION
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*       To download data
+*----------------------------------------------------------------------*
+FORM download_data .
+  IF NOT t_outdata[] IS INITIAL.
+    PERFORM download_header_line.
+
+    DATA : f_string TYPE string.
+    f_string = p_dwl.
+
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+*    BIN_FILESIZE                    =
+        filename                        = f_string
+       filetype                        = 'ASC'
+*    APPEND                          = ' '
+       write_field_separator           = 'X'
+      TABLES
+        data_tab                        = t_outdata[]
+*    FIELDNAMES                      =
+     EXCEPTIONS
+       file_write_error                = 1
+       no_batch                        = 2
+       gui_refuse_filetransfer         = 3
+       invalid_type                    = 4
+       no_authority                    = 5
+       unknown_error                   = 6
+       header_not_allowed              = 7
+       separator_not_allowed           = 8
+       filesize_not_allowed            = 9
+       header_too_long                 = 10
+       dp_error_create                 = 11
+       dp_error_send                   = 12
+       dp_error_write                  = 13
+       unknown_dp_error                = 14
+       access_denied                   = 15
+       dp_out_of_memory                = 16
+       disk_full                       = 17
+       dp_timeout                      = 18
+       file_not_found                  = 19
+       dataprovider_exception          = 20
+       control_flush_error             = 21
+       OTHERS                          = 22
+              .
+    IF sy-subrc = 0.
+*      CLEAR t_outdata[].
+    ELSE.
+      v_flag = 'X'.
+    ENDIF.
+
+  ELSE.
+    MESSAGE 'No Records to process' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM download_header_line .
+*        lifnr         LIKE lfb1-lifnr,
+  t_outdata-bukrs = 'Company Code'.
+  t_outdata-ekorg = 'Purchasing group'.
+  t_outdata-ktokk = 'Customer account group'.
+*       Address
+  t_outdata-anred = 'Title'.
+  t_outdata-name1 = 'Name 1'.
+  t_outdata-sortl = 'Search term'.
+  t_outdata-name2 = 'Name 2'.
+  t_outdata-suppl2 = 'Street 3'.
+  t_outdata-stras = 'Street and house number'.
+  t_outdata-ort01 = 'City'.
+  t_outdata-regio = 'Region'.
+  t_outdata-pstlz = 'Postal code'.
+  t_outdata-pfach = 'Post office box'.
+*  t_outdata-pfort = 'PO Box city'.
+*  t_outdata-ort02 = 'District'.
+*  t_outdata-pstl2 = 'P.O. Box Postal Code'.
+  t_outdata-land1 = 'Country key'.
+  t_outdata-txjcd = 'Tax Juridiction'.
+  t_outdata-telf1 = 'Telephone 1'.
+  t_outdata-telfx = 'Fax number'.
+  t_outdata-telf2 = 'Telephone 2'.
+  t_outdata-email = 'Email'.
+  t_outdata-stceg = 'A.B.N.'.
+*       payment transactions
+  t_outdata-banks = 'Bank country key'.
+  t_outdata-bankl = 'Bank key'.
+  t_outdata-bankn = 'Bank account'.
+  t_outdata-bkont = 'Bank control key'.
+  t_outdata-bvtyp = 'Partner bank key'.
+  t_outdata-bkref = 'Reference spec for bank'.
+  t_outdata-xezer = 'Collection authorization'.
+*       accounting information
+  t_outdata-akont = 'Reconciliation acco'.
+  t_outdata-zuawa = 'Sort key'.
+  t_outdata-lnrze = 'Head office account'.
+  t_outdata-altkn = 'Previous master record'.
+*       payment data
+  t_outdata-zterm = 'Terms of payment key'.
+  t_outdata-reprf = 'Check flag for dbl inv'.
+  t_outdata-zwels = 'Payment method'.
+  t_outdata-zahls = 'Payment block'.
+*       correspondence
+  t_outdata-eikto = 'Acct no at vendor'.
+  t_outdata-zsabe = 'User at vendor'.
+  t_outdata-kverm = 'Account memo'.
+*       purchasing data
+  t_outdata-waers = 'Order currency'.
+  t_outdata-zterm1 = 'Terms of payment'.
+  t_outdata-inco1 =  'Incoterms part 1'.
+  t_outdata-inco2 = 'Incoterms part 2'.
+  t_outdata-minbw = 'Order value'.
+  t_outdata-kalsk = 'Group for calc. scheme'.
+  t_outdata-meprf = 'Pricing date control'.
+  t_outdata-verkf = 'Salesperson at vendor'.
+  t_outdata-telf11 = 'Vendors telephone no.'.
+  t_outdata-webre  = 'GR-based inv. verfctn'.
+  t_outdata-xersy =  'Eval. receipt sett'.
+  t_outdata-kzabs =  'Aknowledgement reqd'.
+  t_outdata-kzaut =  'Automatic PO'.
+  t_outdata-lfabc = 'ABC indicator'.
+  t_outdata-expvz = 'Mode of trnsprt-border'.
+  t_outdata-zolla = 'Office of entry'.
+*       partner functions
+  t_outdata-wyt3_parvw = 'Parnter function ID'.
+  t_outdata-wrf02k_gparn = 'No. of business partner'.
+  t_outdata-wyt3_defpa = 'Default partner'.
+  IF p_r2 = 'X'.
+  t_outdata-lifnr      = 'Vendor number'.
+  ENDIF.
+*        t_outdata-lfurl          TYPE lfa1-lfurl,
+  IF p_r1 = 'X'.
+    t_outdata-desc = 'Description'.
+  ENDIF.
+  INSERT  t_outdata INDEX 1.
+ENDFORM.                    " DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+*    clear t_rest-desc.
+    CONCATENATE t_rest-desc
+                g_mess
+                ' , '
+                INTO t_rest-desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*       Validate Fields befor uploading
+*----------------------------------------------------------------------*
+FORM field_validation .
+  DATA: w_indata  like indata OCCURS 0 WITH HEADER LINE,
+        w_indata1 like t_rest OCCURS 0 WITH HEADER LINE.
+
+  DATA: T_REGIO1 LIKE T005U OCCURS 0 WITH HEADER LINE.
+  DATA  v_old_kunnr(10) TYPE n.
+  DATA  t_line type i.
+  DATA  v_rn.
+
+*  w_indata[] = indata[].
+  LOOP AT indata.
+    ADD 1 TO tot-read.
+
+    IF indata-ktokk IS INITIAL.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING indata TO t_rest .
+      t_rest-sort = 'B'.
+      t_rest-desc = 'Account group cant be blank'.
+      APPEND t_rest.
+      DELETE indata.
+      CONTINUE.
+    ELSE.
+      TRANSLATE indata-ktokk TO UPPER CASE.
+      SELECT SINGLE ktokk FROM t077k
+                          INTO t077k-ktokk
+                         WHERE ktokk = indata-ktokk.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING indata TO t_rest .
+        t_rest-sort = 'B'.
+        CONCATENATE 'Account group '
+                    indata-ktokk
+                    ' Does not Exist'
+              INTO  t_rest-desc.
+        APPEND t_rest.
+        DELETE indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+***This was changed as old vendor number is repeated in upload file
+*    loop at w_indata where altkn = indata-altkn.
+*         MOVE-CORRESPONDING w_indata to w_indata1.
+*         CONCATENATE 'Prev Acct No  '
+*                     indata-altkn
+*                     '  Should Not be Repeated'
+*                INTO w_indata1-desc.
+*         w_indata1-sort = 'B'.
+*         append w_indata1.
+*    endloop.
+*
+*    DESCRIBE TABLE w_indata1 LINES t_line.
+*    if t_line gt 1.
+*       ADD t_line TO tot-err.
+*       t_line = t_line - 1.
+*       ADD t_line TO tot-read.
+*       append LINES OF w_indata1 to t_rest.
+*       delete indata WHERE altkn = indata-altkn.
+*       clear w_indata1[].
+*       CONTINUE.
+*    else.
+*       clear w_indata1[].
+*    endif.
+***This was changed as old vendor number is repeated in upload file
+
+    IF indata-altkn CO '1234567890'.
+      v_old_kunnr = indata-altkn.
+      indata-altkn = v_old_kunnr.
+    ENDIF.
+
+    IF indata-bukrs IS NOT INITIAL.
+      SELECT SINGLE bukrs FROM t001
+                          INTO t001-bukrs
+                         WHERE bukrs = indata-bukrs.
+      IF sy-subrc = 0.
+        SELECT SINGLE lifnr FROM lfb1 INTO lfb1-lifnr
+                           WHERE bukrs = indata-bukrs
+                           AND   altkn = indata-altkn.
+        IF sy-subrc = 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING indata TO t_rest .
+          t_rest-sort = 'B'.
+          t_rest-desc = 'Vendor Already Created'.
+          APPEND t_rest.
+          DELETE indata.
+          CONTINUE.
+        ENDIF.
+      ELSE.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING indata TO t_rest .
+        t_rest-sort = 'B'.
+        CONCATENATE 'Company Code '
+                    indata-bukrs
+                    ' Does not Exist'
+              INTO  t_rest-desc.
+        APPEND t_rest.
+        DELETE indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+
+
+    IF indata-ekorg IS NOT INITIAL.
+      SELECT SINGLE ekorg FROM  t024e
+                          INTO  t024e-ekorg
+                          WHERE ekorg = indata-ekorg.
+      IF sy-subrc <> 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING indata TO t_rest .
+        t_rest-sort = 'B'.
+        CONCATENATE 'Purchasing Organization '
+                    indata-ekorg
+                    ' Does not Exist'
+              INTO  t_rest-desc.
+        APPEND t_rest.
+        DELETE indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+
+*********************************************
+    IF indata-regio IS NOT INITIAL.
+       clear v_rn.
+       select BLAND BEZEI from t005u
+                          into corresponding fields of table t_regio1
+                         where land1 = indata-land1.
+       if sy-subrc = 0.
+          TRANSLATE indata-regio TO UPPER CASE.
+          loop at t_regio1.
+             TRANSLATE t_regio1-bezei TO UPPER CASE.
+             if t_regio1-bezei = indata-regio.
+                v_rn = 'X'.
+             endif.
+          endloop.
+          clear t_regio1[].
+          if v_rn ne 'X'.
+             ADD 1 TO tot-err.
+             MOVE-CORRESPONDING indata TO t_rest .
+             t_rest-sort = 'B'.
+             CONCATENATE 'Region '
+                         indata-regio
+                         ' does not exist  '
+                    INTO  t_rest-desc.
+             APPEND t_rest.
+             DELETE indata.
+             CONTINUE.
+          endif.
+       else.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING indata TO t_rest .
+          t_rest-sort = 'B'.
+          CONCATENATE 'No Region found for Country  '
+                      indata-land1
+                 INTO  t_rest-desc.
+          APPEND t_rest.
+          DELETE indata.
+          CONTINUE.
+       endif.
+
+*    ELSE.
+*      ADD 1 TO tot-err.
+*      MOVE-CORRESPONDING indata TO t_rest .
+*      t_rest-sort = 'B'.
+*      t_rest-desc = 'Please fill Region '.
+*      APPEND t_rest.
+*      DELETE indata.
+*      CONTINUE.
+    ENDIF.
+
+*********************************************
+
+
+  ENDLOOP.
+  clear w_indata[].
+ENDFORM.                    " FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+  PERFORM download_header_line.
+  LOOP AT t_rest.
+    MOVE-CORRESPONDING t_rest TO t_outdata.
+    IF t_rest-bukrs = 'Erro'.
+      t_outdata-bukrs = 'Error Datas'.
+    ELSEIF t_rest-bukrs = 'Succ'.
+      t_outdata-bukrs = 'Success Datas'.
+    ENDIF.
+    t_outdata-lifnr = ' '.
+    APPEND t_outdata.
+  ENDLOOP.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_outdata[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc = 0.
+    CLEAR t_outdata[].
+  ENDIF.
+
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  FETCH_PURC_ORG
+*&---------------------------------------------------------------------*
+* To fetch purchase organization details for corresponding lifnr
+*----------------------------------------------------------------------*
+FORM fetch_purc_org .
+  MOVE-CORRESPONDING t_purc TO outdata.
+  READ TABLE t_code WITH KEY lifnr = t_purc-lifnr.
+  MOVE-CORRESPONDING t_code TO outdata.
+
+  SELECT SINGLE smtp_addr FROM adr6
+                          INTO adr6-smtp_addr
+                         WHERE addrnumber = t_code-adrnr.
+  IF sy-subrc = 0.
+    outdata-email = adr6-smtp_addr.
+  ENDIF.
+
+  DELETE t_code WHERE lifnr = t_purc-lifnr.
+
+  SELECT  SINGLE * FROM  lfbk
+                   INTO CORRESPONDING FIELDS OF  t_bank
+                  WHERE lifnr = t_purc-lifnr.
+  IF sy-subrc = 0.
+    MOVE-CORRESPONDING t_bank TO outdata.
+  ENDIF.
+  MOVE-CORRESPONDING outdata TO t_outdata.
+
+  SELECT SINGLE BEZEI FROM T005U
+                      INTO T005U-BEZEI
+                     WHERE BLAND = T_OUTDATA-REGIO
+                       AND LAND1 = T_OUTDATA-LAND1.
+  IF sy-subrc = 0.
+    T_outdata-REGIO = T005U-BEZEI.
+  ENDIF.
+  APPEND t_outdata.
+  CLEAR: t_purc,
+         t_bank,
+         outdata,
+         t_outdata.
+ENDFORM.                    " FETCH_PURC_ORG
+*&---------------------------------------------------------------------*
+*&      Form  FETCH_GEN_DETAILS
+*&---------------------------------------------------------------------*
+*   To fetch vendor without company code and purchase organization
+*----------------------------------------------------------------------*
+FORM fetch_gen_details .
+  MOVE-CORRESPONDING t_code TO outdata.
+
+  SELECT SINGLE smtp_addr FROM adr6
+                          INTO adr6-smtp_addr
+                         WHERE addrnumber = t_code-adrnr.
+  IF sy-subrc = 0.
+    outdata-email = adr6-smtp_addr.
+  ENDIF.
+
+  SELECT  SINGLE * FROM  lfbk
+                   INTO CORRESPONDING FIELDS OF  t_bank
+                  WHERE lifnr = t_purc-lifnr.
+  IF sy-subrc = 0.
+    MOVE-CORRESPONDING t_bank TO outdata.
+  ENDIF.
+  MOVE-CORRESPONDING outdata TO t_outdata.
+  SELECT SINGLE BEZEI FROM T005U
+                      INTO T005U-BEZEI
+                     WHERE BLAND = T_OUTDATA-REGIO
+                       AND LAND1 = T_OUTDATA-LAND1.
+  IF sy-subrc = 0.
+    T_outdata-REGIO = T005U-BEZEI.
+  ENDIF.
+  APPEND t_outdata.
+  CLEAR: t_bank,
+         outdata,
+         t_outdata.
+ENDFORM.                    " FETCH_GEN_DETAILS

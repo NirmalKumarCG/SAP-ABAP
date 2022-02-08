@@ -1,0 +1,869 @@
+REPORT  znpi_stock_upload NO STANDARD PAGE HEADING
+*                          MESSAGE-ID zm
+                          LINE-SIZE  100
+                          LINE-COUNT 65.
+************************************************************************
+* This program uploads a flat file from the PC and creates Stocks for  *
+* the Material based on the data uploaded by calling transaction MB11. *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 27.01.2009 | Vikram.S      | Initial program             *
+************************************************************************
+TABLES:mkpf,mseg,mara,t001l,marc,t001w.
+*Type-pools
+TYPE-POOLS : truxs.
+
+DATA: it_raw        TYPE truxs_t_text_data.
+DATA: gdsmt_header  TYPE bapi2017_gm_head_01.
+DATA: gdsmt_code    TYPE bapi2017_gm_code.
+DATA: gdsmt_headret TYPE bapi2017_gm_head_ret.
+DATA: gdsmt_item    TYPE bapi2017_gm_item_create OCCURS 0 WITH HEADER LINE.
+DATA: return        TYPE bapiret2 OCCURS 0 WITH HEADER LINE.
+DATA: retmatdoc     TYPE bapi2017_gm_head_ret-mat_doc.
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+*Upload Structure of the flat file.
+DATA: BEGIN OF t_indat OCCURS 0,
+       bldat LIKE mkpf-bldat,     "Document Date
+       budat LIKE mkpf-budat,     "Posting Date
+       bwart LIKE mseg-bwart,     "Movement Type
+       werks LIKE mseg-werks,     "Plant
+       lgort LIKE mseg-lgort,     "Storage Location
+       matnr LIKE mseg-matnr,     "Material
+       erfmg(10) TYPE C, "LIKE mseg-erfmg,     "Qty
+*       charg LIKE mseg-charg,     "Batch
+       pdate LIKE mkpf-bldat,      "Production date
+       edate LIKE mkpf-bldat,      "Expiry date
+       docnu like mseg-mblnr,      "Document Number
+       year  like mseg-mjahr,      "Year
+*       num   like mseg-zeile,      "line no
+      END OF t_indat.
+
+DATA : BEGIN OF t_indata OCCURS 0.
+DATA : key TYPE i.
+        INCLUDE STRUCTURE t_indat.
+DATA : END OF t_indata.
+DATA :BEGIN OF  t_err  OCCURS 0,
+       bldat(15) TYPE c,     "Document Date
+       budat(15) TYPE c,     "Posting Date
+       bwart(15) TYPE c,     "Movement Type
+       werks(6)  TYPE c,     "Plant
+       lgort(15) TYPE c,     "Storage Location
+       matnr(18) TYPE c,     "Material
+       erfmg(13) TYPE c,     "Qty
+*       charg(10) TYPE c,     "Batch
+       pdate(15) type c,     "Production date
+       edate(15) TYPE c,     "Expiry date
+       desc TYPE string,
+      END OF t_err.
+
+DATA : t_succ LIKE t_err OCCURS 0 WITH HEADER LINE.
+
+DATA :BEGIN OF  t_down  OCCURS 0.
+        INCLUDE STRUCTURE t_indat.
+DATA : mblnr LIKE mseg-mblnr.
+DATA : END OF t_down.
+
+DATA :BEGIN OF  t_disp  OCCURS 0,
+       bldat(15) TYPE c,     "Document Date
+       budat(15) TYPE c,     "Posting Date
+       bwart(15) TYPE c,     "Movement Type
+       werks(6)  TYPE c,     "Plant
+       lgort(15) TYPE c,     "Storage Location
+       matnr(18) TYPE c,     "Material
+       erfmg(13) TYPE c,     "Qty
+       charg(10) TYPE c,     "Batch
+*       pdate(15) type c,     "Production date
+*       edate(15) TYPE c,     "Expiry date
+       mblnr(15) TYPE c,
+      END OF t_disp.
+DATA : w_intial LIKE t_err,
+       g_mess   TYPE string.
+DATA : g_plt    LIKE mseg-werks,
+       g_stl    LIKE mseg-lgort,
+       g_mvt    LIKE gdsmt_item-move_type.
+DATA:  l_init   TYPE i,
+       l_init1  TYPE i.
+DATA : v_flag,
+       g_wait   LIKE bapita-wait VALUE 1.
+DATA : v_flag1  TYPE c,
+       v_flag2  TYPE c.
+*----------------------------------------------------------------------*
+*  Selection Screen                                                    *
+*----------------------------------------------------------------------*
+*SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+*PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a           "Upload File
+*                         DEFAULT 'c:\temp\parbcust.xls' OBLIGATORY,
+*            p_head      AS CHECKBOX MODIF ID a,                   "Header Line
+*            p_test      AS CHECKBOX MODIF ID a.     " test run? X or Y for yes
+*PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a           "Dwonload File Path
+*                         DEFAULT 'c:\temp\Success.xls' OBLIGATORY.
+*SELECTION-SCREEN : END OF BLOCK 001.
+************************************************
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS       : p_r1 RADIOBUTTON GROUP rad
+                        USER-COMMAND clk DEFAULT 'X'.            " upload Radio Button
+SELECTION-SCREEN COMMENT 5(35) text-003.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a           "Upload File
+                         DEFAULT 'c:\temp\parbcust.xls',
+            p_head      AS CHECKBOX MODIF ID a,                   "Header Line
+            p_test      AS CHECKBOX MODIF ID a.     " test run? X or Y for yes
+PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a           "Dwonload File Path
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS : p_r2 RADIOBUTTON GROUP rad.
+SELECTION-SCREEN COMMENT 5(35) text-004.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-002.
+SELECT-OPTIONS : s_dat FOR  mkpf-bldat MODIF ID b.                "Document Date in Document
+SELECT-OPTIONS : s_pdt FOR  mkpf-budat MODIF ID b.                "Posting Date in the Document
+PARAMETERS     : p_mov LIKE mseg-bwart MODIF ID b.                "Movement Type
+SELECT-OPTIONS : s_plt FOR  t001w-werks MODIF ID b.                "Plant
+SELECT-OPTIONS : s_stl FOR  t001l-lgort MODIF ID b.                "Storage Location
+SELECT-OPTIONS : s_mdo FOR  mseg-mblnr MODIF ID b.                "Number of Material Document
+
+PARAMETERS     : p_down LIKE rlgrap-filename MODIF ID b
+                  DEFAULT 'c:\temp\Customer Master.xls'.           "Download File Path
+SELECTION-SCREEN : END OF BLOCK 002.
+
+*----------------------------------------------------------------------*
+*  AT SELECTION-SCREEN OUTPUT                                                    *
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+*Inactive Fields depending on the radio button
+  LOOP AT SCREEN.
+    IF p_r1 = 'X'.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r2 = 'X'.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get file name for download
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_down.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_down
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*----------------------------------------------------------------------*
+* Start of Selection                                                   *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+
+*if Upload is executed validate fields
+  IF p_r1 = 'X'.
+*Validating Session name
+    IF p_upl IS INITIAL.
+      MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating Session mode
+    IF p_rest IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+
+  IF p_r1 = 'X'.
+    TRANSLATE p_upl TO LOWER CASE.
+*Upload to internal table
+    PERFORM upload_file USING p_upl.
+*If no records in Internal table
+    IF t_indat[] IS INITIAL .
+      WRITE: / 'No records were uploaded'.
+      ULINE.
+      EXIT.
+    ENDIF.
+*Assign Values
+    PERFORM assign_values.
+*Valdtae flate file
+    PERFORM validate_file.
+*  IF p_test IS INITIAL.
+    CLEAR :gdsmt_header,
+       gdsmt_code,
+       gdsmt_item,
+       return,
+       gdsmt_item[],
+       return[].
+    LOOP AT t_indata .
+      PERFORM stock_upl.
+      AT END OF key.
+* Call goods movement BAPI
+        CALL FUNCTION 'BAPI_GOODSMVT_CREATE'
+          EXPORTING
+            goodsmvt_header  = gdsmt_header
+            goodsmvt_code    = gdsmt_code
+            testrun          = p_test
+          IMPORTING
+            goodsmvt_headret = gdsmt_headret
+            materialdocument = retmatdoc
+          TABLES
+            goodsmvt_item    = gdsmt_item
+            return           = return.
+        PERFORM err_msg.
+      ENDAT.
+    ENDLOOP.
+  ENDIF.
+
+*If download is Executed  validate fields
+  IF p_r2 = 'X'.
+
+*Validating result file path
+    IF p_down IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating the Movement Type
+    IF p_mov IS INITIAL.
+      MESSAGE 'Please Fill the Movement Type' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    TRANSLATE p_down TO LOWER CASE.
+*Validation for Download
+    PERFORM validate_download.
+    IF v_flag1 = 'X'.
+      CLEAR v_flag1.
+      EXIT.
+    ENDIF.
+
+    IF t_down[] IS NOT INITIAL.
+*Download fuction
+      PERFORM download_data.
+    ENDIF.
+  ENDIF.
+
+
+*----------------------------------------------------------------------*
+* End of Selection                                                     *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+  IF p_r1 = 'X'.
+*Sorting the Success and error files in a internal table
+    IF t_succ[] IS NOT INITIAL.
+      LOOP AT t_err.
+        IF l_init1 IS INITIAL.
+          l_init1 = 1.
+          CLEAR : t_succ.
+          APPEND  t_succ.
+          t_succ-bldat = 'Errors'.
+          APPEND t_succ.
+        ENDIF.
+        MOVE-CORRESPONDING t_err TO t_succ.
+        APPEND t_succ.
+      ENDLOOP.
+    ELSE.
+      MOVE t_err[] TO t_succ[].
+      CLEAR : t_succ.
+      t_succ-bldat = 'Errors'.
+      INSERT  t_succ INDEX 1.
+    ENDIF.
+*Adding the intial line of the xls.
+    PERFORM intial_line.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+*Write Function Depending on upload or download
+  WRITE: /01      text-001 ,
+          30        ':',
+          31      sy-repid,
+*          92      text-001,
+          92      sy-pagno,
+         /01      text-003,
+          10      'by',
+          30      ':',
+          31      sy-uname,
+          82      sy-datum DD/MM/YY,
+          92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  IF p_r1 = 'X'.
+    IF v_flag NE 'X'.
+      WRITE : /01 'Successfully Download'.
+      WRITE: /01     text-005,
+              30     p_rest.
+      SKIP 1.
+    ELSE.
+      CLEAR v_flag.
+      WRITE : /01 'Error in Downloading the File'.
+    ENDIF.
+    ULINE.
+    SKIP 1.
+
+    WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+    IF p_test IS INITIAL.
+      WRITE: / 'TOTAL DOCUMENT CREATED',    28 tot-ok.
+      WRITE: / 'TOTAL DOCUMENT IN ERROR',   28 tot-err.
+    ELSE.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL RECORDS SUCCESS',    28 tot-ok.
+      WRITE: / 'TOTAL RECORDS ERROR',   28 tot-err.
+    ENDIF.
+  ELSE.
+    IF v_flag2 NE 'X'.
+      IF t_disp[] IS NOT INITIAL.
+        WRITE : /01 'Successfully Download'.
+        WRITE: /01     text-005,
+                30     p_down.
+      ELSE.
+        WRITE : /01 'No Record to Process'.
+      ENDIF.
+      SKIP 1.
+    ELSE.
+      CLEAR v_flag2.
+      WRITE : /01 'Error in Downloading the File'.
+    ENDIF.
+    ULINE.
+    SKIP 1.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Uploads the file from the workstation using the standard SAP
+*       function module WS_UPLOAD.
+*----------------------------------------------------------------------*
+FORM upload_file USING p_upl.
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+     i_line_header              = p_head
+      i_tab_raw_data             = it_raw
+      i_filename                 = p_upl
+    TABLES
+      i_tab_converted_data       = t_indat
+   EXCEPTIONS
+     conversion_failed          = 1
+     OTHERS                     = 2
+            .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                               " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  STOCK_UPL
+*&---------------------------------------------------------------------*
+*       Create Stock for the material
+*----------------------------------------------------------------------*
+FORM stock_upl .
+data : l_charg like mseg-charg.
+  IF  t_indata-budat IS NOT INITIAL
+  AND t_indata-bldat IS NOT INITIAL
+  AND t_indata-bwart IS NOT INITIAL
+  AND t_indata-werks IS NOT INITIAL
+  AND t_indata-lgort IS NOT INITIAL.
+    gdsmt_header-pstng_date = t_indata-budat.
+    gdsmt_header-doc_date   = t_indata-bldat.
+    g_mvt = t_indata-bwart.
+    g_plt = t_indata-werks.
+    g_stl = t_indata-lgort.
+    gdsmt_code-gm_code = '06'.                              " MB11
+    CLEAR gdsmt_item.
+  ENDIF.
+  MOVE g_mvt           TO gdsmt_item-move_type.
+  MOVE t_indata-matnr  TO gdsmt_item-material.
+  MOVE t_indata-erfmg  TO gdsmt_item-entry_qnt.
+  MOVE g_plt TO gdsmt_item-plant.
+  IF t_indata-lgort IS NOT INITIAL.
+    MOVE t_indata-lgort TO gdsmt_item-stge_loc.
+  ELSE.
+    MOVE g_stl TO gdsmt_item-stge_loc.
+  ENDIF.
+*  if t_indata-charg is NOT INITIAL.
+*    MOVE t_indata-charg TO gdsmt_item-batch.
+*  endif.
+  if t_indata-pdate is NOT INITIAL.
+    move t_indata-pdate to gdsmt_item-PROD_DATE.
+  endif.
+
+  if t_indata-edate is NOT INITIAL.
+    move t_indata-edate to gdsmt_item-EXPIRYDATE.
+*  else.
+*    SELECT mara~MHDHB
+*           INTO t_indata-edate
+*         from mara  INNER JOIN marc on mara-matnr = marc-matnr
+*         WHERE mara-matnr = t_indata-matnr
+*          and marc-werks = t_indata-werks.
+  ENDIF.
+
+  if  t_indata-pdate is INITIAL
+  and t_indata-edate is INITIAL.
+
+    SELECT  SINGLE charg FROM mseg
+                        into l_charg
+                       WHERE mblnr = t_indata-docnu
+                       and   mjahr = t_indata-year
+                       and   matnr = t_indata-matnr
+                       and   werks = g_plt.
+
+   if sy-subrc = 0.
+     MOVE l_charg TO gdsmt_item-batch.
+   endif.
+
+  endif.
+
+  APPEND gdsmt_item.
+ENDFORM.                    " STOCK_UPL
+*&---------------------------------------------------------------------*
+*&      Form  INTIAL_LINE
+*&---------------------------------------------------------------------*
+*       Adding the intial line of the xls
+*----------------------------------------------------------------------*
+FORM intial_line .
+  w_intial-bldat  = 'Document Date'.
+  w_intial-budat  = 'Posting Date'.
+  w_intial-bwart  = 'Movement type'.
+  w_intial-werks  = 'Plant'.
+  w_intial-lgort  = 'Storage Location'.
+  w_intial-matnr  = 'Material'.
+  w_intial-erfmg  = 'Quantity'.
+*  w_intial-charg  = 'Batch'.
+  w_intial-pdate  = 'Production date'.
+  w_intial-edate  = 'Expiry Date'.
+  w_intial-desc   = 'Description'.
+ENDFORM.                    " INTIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FILE
+*&---------------------------------------------------------------------*
+*       Validate flat file
+*----------------------------------------------------------------------*
+FORM validate_file .
+  DATA : v_mat(18) TYPE n,
+         l_mat TYPE mara-matnr,
+         l_plt LIKE marc-werks,
+         l_slo LIKE t001l-lgort.
+*         l_plt1 like marc-werks.
+  LOOP AT t_indata.
+    IF  t_indata-bldat IS NOT INITIAL
+    AND t_indata-budat IS NOT INITIAL
+    AND t_indata-bwart IS NOT INITIAL
+    AND t_indata-werks IS NOT INITIAL
+    AND t_indata-lgort IS NOT INITIAL.
+      ADD 1 TO tot-read.
+    ENDIF.
+    TRANSLATE t_indata-matnr TO UPPER CASE.
+    TRANSLATE t_indata-werks TO UPPER CASE.
+    TRANSLATE t_indata-lgort TO UPPER CASE.
+*    TRANSLATE t_indata-charg TO UPPER CASE.
+    MODIFY t_indata.
+    IF t_indata-matnr CO '1234567890 '.
+      v_mat = t_indata-matnr.
+      t_indata-matnr = v_mat.
+      MODIFY t_indata.
+    ENDIF.
+    SELECT SINGLE * FROM mara
+                    INTO mara
+                   WHERE matnr = t_indata-matnr.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      l_mat = t_indata-matnr.
+      LOOP AT t_indata WHERE key = t_indata-key.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        CONCATENATE  'Material'
+                     l_mat
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+      ENDLOOP.
+      CLEAR : t_err-desc.
+      CONTINUE.
+    ENDIF.
+    IF t_indata-werks IS NOT INITIAL.
+*      l_plt1 = t_indata-werks.
+      SELECT SINGLE * FROM marc
+                      INTO marc
+                     WHERE matnr = t_indata-matnr
+                     AND   werks = t_indata-werks.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        l_mat = t_indata-matnr.
+        l_plt = t_indata-werks.
+
+        LOOP AT t_indata WHERE key = t_indata-key.
+          MOVE-CORRESPONDING t_indata TO t_err.
+          CONCATENATE  'Material or Plant'
+                        l_mat ',' l_plt
+                       'Does not Exist in the SAP System'
+                       INTO t_err-desc
+                       SEPARATED BY space.
+          APPEND t_err.
+          DELETE t_indata.
+        ENDLOOP.
+        CLEAR : t_err-desc.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-lgort IS NOT INITIAL.
+      SELECT SINGLE  * FROM t001l
+                       INTO t001l
+                      WHERE werks = t_indata-werks
+                      AND   lgort = t_indata-lgort.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        l_slo = t_indata-lgort.
+        LOOP AT t_indata WHERE key = t_indata-key.
+          MOVE-CORRESPONDING t_indata TO t_err.
+          CONCATENATE  'Storage Location'
+                        l_slo
+                       'Does not Exist for the Plant in the SAP System'
+                       INTO t_err-desc
+                       SEPARATED BY space.
+          APPEND t_err.
+          DELETE t_indata.
+        ENDLOOP.
+        CLEAR : t_err-desc.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " VALIDATE_FILE
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+
+  LOOP AT return WHERE type = 'E'.
+
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = return-id
+        lang      = 'EN'
+        no        = return-number
+        v1        = return-message_v1
+        v2        = return-message_v2
+        v3        = return-message_v3
+        v4        = return-message_v4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+    CONCATENATE t_err-desc
+                g_mess
+                ','
+                INTO t_err-desc SEPARATED BY space.
+
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  INSERT w_intial INTO t_succ INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_succ[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc NE 0.
+    v_flag = 'X'.
+  ENDIF.
+
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  ASSIGN_VALUES
+*&---------------------------------------------------------------------*
+*       Assign Values to the flat file
+*----------------------------------------------------------------------*
+FORM assign_values .
+  DATA : cnt TYPE i.
+  LOOP AT t_indat.
+    IF  t_indat-bldat IS NOT INITIAL
+    AND t_indat-budat IS NOT INITIAL
+    AND t_indat-bwart IS NOT INITIAL
+    AND t_indat-werks IS NOT INITIAL
+    AND t_indat-lgort IS NOT INITIAL.
+      MOVE-CORRESPONDING t_indat TO t_indata.
+      cnt = cnt + 1.
+      t_indata-key = cnt.
+      APPEND t_indata .
+    ELSE.
+      t_indata-key = cnt.
+      MOVE-CORRESPONDING t_indat TO t_indata.
+      APPEND t_indata .
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " ASSIGN_VALUES
+*&---------------------------------------------------------------------*
+*&      Form  ERR_MSG
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM err_msg .
+  DATA : l_key TYPE i.
+  CLEAR : G_MESS.
+  data : l_tabix type i.
+  l_key = t_indata-key.
+  READ TABLE return WITH  KEY type = 'E'.
+  IF sy-subrc =  0.
+    ADD 1 TO tot-err.
+    LOOP AT t_indata WHERE key = l_key.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err.
+    l_tabix = l_tabix + 1.
+    if l_tabix = 1.
+*Get the Error details
+      PERFORM format_message.
+    endif.
+      APPEND t_err.
+
+    ENDLOOP.
+    CLEAR : g_mess.
+  ELSE.
+    ADD 1 TO tot-ok.
+    LOOP AT t_indata WHERE key = l_key.
+      IF l_init IS INITIAL.
+        l_init = 1.
+        CLEAR : t_succ.
+        t_succ-bldat = 'Success'.
+        APPEND t_succ.
+      ENDIF.
+*      at FIRST.
+      MOVE gdsmt_headret+10(4) TO g_mess.
+      CONCATENATE retmatdoc
+                  'Year'
+                  g_mess
+                 INTO t_succ-desc
+                 SEPARATED BY space.
+*      ENDAT.
+*Success Message
+      MOVE-CORRESPONDING t_indata TO t_succ.
+      APPEND t_succ.
+      CLEAR : t_succ.
+    ENDLOOP.
+*Check the test run is not intial.
+    IF p_test IS  INITIAL.
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+       EXPORTING
+         wait          = g_wait
+*       IMPORTING
+*         RETURN        =
+                .
+
+      COMMIT WORK.
+    ENDIF.
+  ENDIF.
+  CLEAR :gdsmt_header,
+         gdsmt_code,
+         gdsmt_item,
+         return,
+         gdsmt_item[],
+         return[],
+         g_mess,
+         gdsmt_headret,
+         retmatdoc,
+         t_succ,
+         t_err.
+ENDFORM.                    " ERR_MSG
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Validation for Download
+*----------------------------------------------------------------------*
+FORM validate_download .
+
+  SELECT a~bwart a~matnr
+         a~werks a~lgort
+         a~charg a~erfmg
+         b~bldat b~budat
+         b~mblnr
+         INTO CORRESPONDING FIELDS OF TABLE t_down
+         FROM mseg AS a INNER JOIN mkpf AS b ON a~mblnr = b~mblnr
+         WHERE a~bwart = p_mov
+         AND   a~werks IN s_plt
+         AND   a~lgort IN s_stl
+         AND   b~bldat IN s_dat
+         AND   b~budat IN s_pdt
+         AND   b~mblnr IN s_mdo.
+
+*  if p_com is NOT INITIAL.
+*    TRANSLATE p_com to UPPER CASE.
+**Validating Company Codes
+*    select SINGLE * from t001
+*                    where bukrs = p_com.
+*    if sy-subrc ne 0.
+*      MESSAGE 'Company Code does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+*      v_flag1 = 'X'.
+*      exit.
+*    endif.
+*  endif.
+*  if p_sal is NOT INITIAL.
+*    TRANSLATE p_sal to UPPER CASE.
+**Validating Sales Organisation
+*    SELECT SINGLE * FROM tvko
+*                    WHERE vkorg EQ p_sal.
+*    IF sy-subrc NE 0.
+*      MESSAGE 'Sales Organisation Does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+*      v_flag1 = 'X'.
+*      exit.
+*    ENDIF.
+*
+*  ENDIF.
+*  IF p_soff IS NOT INITIAL.
+*    TRANSLATE p_soff to UPPER CASE.
+**Validating Sales Office
+*    SELECT SINGLE * FROM tvbur
+*                    WHERE vkbur EQ p_soff.
+*    IF sy-subrc NE 0.
+*      MESSAGE 'Sales office Does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+*      v_flag1 = 'X'.
+*      exit.
+*    ENDIF.
+*  endif.
+ENDFORM.                    " VALIDATE_DOWNLOAD
+
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*       Download fuction
+*----------------------------------------------------------------------*
+FORM download_data .
+  DATA : f_string TYPE string.
+  f_string = p_down.
+  LOOP AT t_down.
+    MOVE-CORRESPONDING t_down TO t_disp.
+    APPEND t_disp.
+  ENDLOOP.
+  CLEAR : t_disp.
+  t_disp-bldat  = 'Document Date'.
+  t_disp-budat  = 'Posting Date'.
+  t_disp-bwart  = 'Movement type'.
+  t_disp-werks  = 'Plant'.
+  t_disp-lgort  = 'Storage Location'.
+  t_disp-matnr  = 'Material'.
+  t_disp-erfmg  = 'Quantity'.
+  t_disp-charg  = 'Batch'.
+  t_disp-mblnr = 'Material Doc.No'.
+  INSERT t_disp INTO t_disp INDEX 1.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_disp[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+    v_flag2 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_DATA

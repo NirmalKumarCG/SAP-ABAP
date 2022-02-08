@@ -1,0 +1,1921 @@
+REPORT zs_customer_upload NO STANDARD PAGE HEADING
+                            MESSAGE-ID zm
+                            LINE-SIZE  100
+                            LINE-COUNT 65.
+************************************************************************
+* This program uploads a flat file from the PC and creates customers   *
+* based on the data uploaded by calling transaction XD01.              *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 18.12.2008 | Vikram.S      | Initial program             *
+************************************************************************
+TABLES: knb1,        "Customer Master (Company Code)
+        knbk,        "Customer Master (Bank Details)
+        bnka,        "Bank master record
+        knvv,        "Customer Master Sales Data
+        kna1,        "General Data in Customer Master
+        tvbvk,       "Sales Groups per Sales Office
+        t151,        "Customer Groups
+        t188,        "Groups for Customer Classifications
+        tvkd,        "Customer Pricing Procedures
+        t189,        "Price List Categories
+        tvko,        "Sales Organizations
+        tvbur,       "Sales Offices
+        tvkgr,       "Sales Groups
+        tvsb,        "Shipping Conditions
+        t001,        "Company Codes
+        knvi.        "Customer Master Tax Indicator
+*Type-pools
+TYPE-POOLS : truxs.
+* include program for common routines for interface programs
+DATA: zzret_code LIKE sy-subrc,
+      v_open.
+DATA: it_raw TYPE truxs_t_text_data.
+* constants - these values will stay the same
+CONSTANTS: c_tcode(4)      TYPE c   VALUE 'XD01'.
+
+DATA: w_upllen             TYPE i   VALUE '2000',
+      err_msg(100)         TYPE c,
+      sap_cusno            LIKE kna1-kunnr,
+      batch_name(30)       TYPE c.
+
+
+DATA: BEGIN OF inrec OCCURS 0,
+        filler(3000),
+      END OF inrec.
+* format of the input file
+DATA: BEGIN OF t_indata OCCURS 0,
+  bukrs     TYPE knb1-bukrs,     " company code
+  vkorg     TYPE knvv-vkorg,     " sales organization
+  vtweg     TYPE knvv-vtweg,     " distribution channel
+  spart     TYPE knvv-spart,     " division
+  ktokd     TYPE kna1-ktokd,     " customer account group
+*       Address details
+  anred     TYPE kna1-anred,     " Title
+  name1     TYPE kna1-name1,                                " name 1
+  sortl     TYPE ADDR1_DATA-sort1,     " sort field
+  name2     TYPE kna1-name2,                                " name 2
+  sret2     type ADDR1_DATA-STR_SUPPL1,                     " Street 2.
+  stras     TYPE ADDR1_DATA-STREET,"kna1-stras,     " street and house number
+  ort01     TYPE kna1-ort01,     " city
+  pstlz     TYPE kna1-pstlz,     " post code
+  ort02     TYPE kna1-ort02,     " district
+  pfach     TYPE kna1-pfach,     " post office box
+  pfort     TYPE kna1-pfort,     " P.O. box city
+  pstl2     TYPE kna1-pstl2,     " P.O. box post code
+  land1     TYPE kna1-land1,     " country key
+  tzone     type ADDR1_DATA-TRANSPZONE,  "Transportation zone
+  rstrg     type ADDR1_DATA-REGIOGROUP,  "Reginoal structure group
+  regio     TYPE kna1-regio,     " region
+  spras(2)  TYPE c,
+*  spras     TYPE kna1-spras,     " language
+  telf1     TYPE kna1-telf1,     " first telephone number
+  telfx     TYPE kna1-telfx,     " fax number
+  telf2     TYPE kna1-telf2,     " second telephone number
+*       Control data
+  stceg     TYPE kna1-stceg,     " A.B.N.
+  lzone     TYPE kna1-lzone,     " transport zone
+*       Payment transactions
+  banks     TYPE knbk-banks,     " bank country key
+  bankl     TYPE knbk-bankl,     " bank key
+  bankn     TYPE knbk-bankn,     " bank account number
+  bkont     TYPE knbk-bkont,     " bank control key
+  bvtyp     TYPE knbk-bvtyp,     " partner bank type
+  bkref     TYPE knbk-bkref,     " reference details
+  xezer     TYPE knbk-xezer,     " indicator: is there collection
+*       Contact person details
+  zname1    TYPE knvk-name1,     " name of customer contact
+*       knvk_telf1(16)     type c,      " telephone no. of cust. cont.
+*       knvk_abtnr(4)      type c,      " department of cust. cont.
+*       knvk_namev(35)     type c,      " first name of customer contact
+*       knvk_anred(30)     type c,      " form of address
+*       knvk_pafkt(2)      type c,      " contact person function
+*       Accounting information
+  akont     TYPE knb1-akont,     " reconciliation account
+  zuawa     TYPE knb1-zuawa,     " sort key
+  knrze     TYPE knb1-knrze,     " head office account number
+  altkn     TYPE knb1-altkn,     " previous account number
+*       Payment data
+  zterm     TYPE knb1-zterm,     " payment term
+  xzver     TYPE knb1-xzver,     " record payment history?
+*       knb1_xedip(1)      type c,      " indicator:send pay.adv. by EDI
+*       Correspondece information
+  eikto     TYPE knb1-eikto,     " account at customer
+  zsabe     TYPE knb1-zsabe,     " customer user
+  kverm     TYPE knb1-kverm,     " internal memo of acct doc.
+  xausz     TYPE knb1-xausz,     " account statement
+*       Sales information
+  cusgr      TYPE KNVV-KDGRP,     "Customer group
+  bzirk      TYPE knvv-bzirk,     " sales district
+  vkbur      TYPE knvv-vkbur,     " sales office
+  vkgrp      TYPE knvv-vkgrp,     " sales group
+*  kdgrp      TYPE knvv-kdgrp,     " customer group
+  waers      TYPE knvv-waers,     " currency
+  awahr      TYPE knvv-awahr,     " order probability
+  begru      TYPE knvv-begru,     " authorization group
+  vsort      TYPE knvv-vsort,     " product proposal
+  zeikto     TYPE knvv-eikto,     " account at customer
+  kurst      TYPE knvv-kurst,     " exchange rate type
+  konda      TYPE knvv-konda,     " price group
+  kalks      TYPE knvv-kalks,     " customer pricing schedule
+  pltyp      TYPE knvv-pltyp,     " price list type
+*          knvv_versg(1)      TYPE c,     " customer statistic group
+*       Shipping information
+  lprio      TYPE knvv-lprio,     " delivery priority
+  vsbed      TYPE knvv-vsbed,     " shipping condition
+  vwerk      TYPE knvv-vwerk,     " delivery plant
+  kzazu      TYPE knvv-kzazu,     " order combination indicator
+*          chspl(1)   type c, " TYPE knvv-chspl,     " batch split allowed indicator
+  autlf      TYPE knvv-autlf,     " complete delivery indicator
+  kztlf      TYPE knvv-kztlf,     " partial delivery at item level
+  antlf(1)   TYPE c,"   TYPE knvv-antlf,     " maximum part delivery
+*       Billing information
+  mrnkz      TYPE knvv-mrnkz,     " manual invoice maintenance
+  perfk      TYPE knvv-perfk,     " billing schedule
+  perrl      TYPE knvv-perrl,     " invoice list schedule
+  zzterm     TYPE knvv-zterm,     " payment terms
+  ktgrd      TYPE knvv-ktgrd,     " account group assignment
+  taxk1      TYPE knvi-taxkd,     " VAT tax classification
+  taxk2      TYPE knvi-taxkd,     " CST classification
+  taxk3      TYPE knvi-taxkd,     " LST classification
+  inco1      TYPE knvv-inco1,     "Incoterms (Part 1)
+  inco2      TYPE knvv-inco2,     "Incoterms (Part 2)
+*          knvv_kvgr1(3),
+*          knvv_kvgr2(3),
+*          knvv_kvgr3(3),
+*          knvv_kvgr4(3),
+*          knvv_kvgr5(3),
+  kunnr     TYPE kna1-kunnr,
+END OF t_indata.
+*Format for Download file
+DATA: BEGIN OF t_outdat OCCURS 0,
+        bukrs(12)     TYPE c,     " company code
+        vkorg(20)     TYPE c,     " sales organization
+        vtweg(8)      TYPE c,     " distribution channel
+        spart(8)      TYPE c,     " division
+        ktokd(22)     TYPE c,     " customer account group
+*       Address details
+        anred(15)     TYPE c,     " Title
+        name1(35)     TYPE c,                               " name 1
+        sortl(20)     TYPE c,     " sort field
+        name2(35)     TYPE c,                               " name 2
+        sret2(40)     TYPE c,     "street2
+        stras(35)     TYPE c,     " street and house number
+        ort01(35)     TYPE c,     " city
+        pstlz(10)     TYPE c,     " post code
+        ort02(35)     TYPE c,     " district
+        pfach(10)     TYPE c,     " post office box
+        pfort(35)     TYPE c,     " P.O. box city
+        pstl2(25)     TYPE c,     " P.O. box post code
+        land1(8)      TYPE c,     " country key
+        tzone(25)     type c,     "Transportation zone
+        rstrg(35)      type c,     "Reginoal structure group
+        regio(6)      TYPE c,     " region
+        spras(12)     TYPE c,     " language
+        telf1(16)     TYPE c,     " first telephone number
+        telfx(31)     TYPE c,     " fax number
+        telf2(16)     TYPE c,     " second telephone number
+*       Control data
+        stceg(20)     TYPE c,     " A.B.N.
+        lzone(14)     TYPE c,     " transport zone
+*       Payment transactions
+        banks(17)     TYPE c,     " bank country key
+        bankl(15)     TYPE c,     " bank key
+        bankn(18)     TYPE c,     " bank account number
+        bkont(11)     TYPE c,     " bank control key
+        bvtyp(17)     TYPE c,     " partner bank type
+        bkref(20)     TYPE c,     " reference details
+        xezer(21)     TYPE c,     " indicator: is there collection
+*       Contact person details
+        zname1(35)    TYPE c,     " name of customer contact
+*       knvk_telf1(16)     type c,      " telephone no. of cust. cont.
+*       knvk_abtnr(4)      type c,      " department of cust. cont.
+*       knvk_namev(35)     type c,      " first name of customer contact
+*       knvk_anred(30)     type c,      " form of address
+*       knvk_pafkt(2)      type c,      " contact person function
+*       Accounting information
+        akont(18)     TYPE c,     " reconciliation account
+        zuawa(8)      TYPE c,     " sort key
+        knrze(18)     TYPE c,     " head office account number
+        altkn(25)     TYPE c,     " previous account number
+*       Payment data
+        zterm(13)     TYPE c,     " payment term
+        xzver(22)     TYPE c,     " record payment history?
+*       knb1_xedip(1)      type c,      " indicator:send pay.adv. by EDI
+*       Correspondece information
+        eikto(13)     TYPE c,     " account at customer
+        zsabe(15)     TYPE c,     " customer user
+        kverm(30)     TYPE c,     " internal memo of acct doc.
+        xausz(18)     TYPE c,     " account statement
+*       Sales information
+        cusgr(20)      TYPE c,     "Customer group
+        bzirk(14)     TYPE c,     " sales district
+        vkbur(12)     TYPE c,     " sales office
+        vkgrp(11)     TYPE c,     " sales group
+*        kdgrp(14)     TYPE c,     " customer group
+        waers(8)      TYPE c,     " currency
+        awahr(12)     TYPE c,     " order probability
+        begru(13)     TYPE c,     " authorization group
+        vsort(15)     TYPE c,     " product proposal
+        zeikto(14)    TYPE c,     " account at customer
+        kurst(15)     TYPE c,     " exchange rate type
+        konda(11)      TYPE c,     " price group
+        kalks(14)     TYPE c,     " customer pricing schedule
+        pltyp(15)     TYPE c,     " price list type
+*          knvv_versg(1)      TYPE c,     " customer statistic group
+*       Shipping information
+        lprio(17)     TYPE c,     " delivery priority
+        vsbed(19)     TYPE c,     " shipping condition
+        vwerk(16)     TYPE c,     " delivery plant
+        kzazu(27)     TYPE c,     " order combination indicator
+*          chspl(18)      TYPE c,     " batch split allowed indicator
+        autlf(30)     TYPE c,     " complete delivery indicator
+        kztlf(14)     TYPE c,     " partial delivery at item level
+        antlf(25)     TYPE c,     " maximum part delivery
+*       Billing information
+        mrnkz(35)     TYPE c,     " manual invoice maintenance
+        perfk(18)     TYPE c,     " billing schedule
+        perrl(18)     TYPE c,     " invoice list schedule
+        zzterm(13)    TYPE c,     " payment terms
+        ktgrd(10)     TYPE c,     " account group assignment
+        taxk1(23)     TYPE c,     " VAT tax classification
+        taxk2(23)     TYPE c,     " CST classification 0002
+        taxk3(23)     TYPE c,     " LST classification 0002
+*          taxk2(25)      TYPE c,     " GST classification 0002
+        inco1(9)      TYPE c,     "Incoterms (Part 1)
+        inco2(28)     TYPE c,     "Incoterms (Part 2)
+        kunnr(12)     TYPE c,     "Customer number
+*          knvv_kvgr1(3),
+*          knvv_kvgr2(3),
+*          knvv_kvgr3(3),
+*          knvv_kvgr4(3),
+*          knvv_kvgr5(3),
+      END OF t_outdat.
+
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+DATA: v_d_kunnr(10) TYPE c,
+      v_old_kunnr(10) TYPE n.
+DATA: v_msgno LIKE sy-msgno.
+
+DATA :BEGIN OF  t_err  OCCURS 0.
+INCLUDE  STRUCTURE t_outdat.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : END OF t_err.
+*Message tab for BDC
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+DATA : w_intial LIKE t_outdat.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_intial.
+DATA : desc  TYPE string.
+DATA : END OF w_init1.
+*Final internal table for Download
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_flag1 TYPE c,
+       v_flag2 TYPE c.
+DATA: BEGIN OF t_tax OCCURS 10.
+        INCLUDE STRUCTURE tstl.
+DATA: END OF t_tax.
+INCLUDE zbdcincl.
+INCLUDE sdzavdat.
+*----------------------------------------------------------------------*
+*  Selection Screen                                                    *
+*----------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS       : p_r1 RADIOBUTTON GROUP rad
+                        USER-COMMAND clk DEFAULT 'X'.            " upload Radio Button
+SELECTION-SCREEN COMMENT 5(35) text-003.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a           "Upload File
+                         DEFAULT 'c:\temp\parbcust.xls',
+            p_head      AS CHECKBOX MODIF ID a,                   "Header Line
+            p_test      AS CHECKBOX MODIF ID a,     " test run? X or Y for yes
+            p_sess(12)  TYPE  c  MODIF ID a,                      "Session name
+            p_mode      MODIF ID a.                               "Mode for BDC
+PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a           "Dwonload File Path
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS : p_r2 RADIOBUTTON GROUP rad.
+SELECTION-SCREEN COMMENT 5(35) text-004.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-002.
+PARAMETERS     : p_com  LIKE knb1-bukrs MODIF ID b.                "Companycode
+PARAMETERS     : p_sal  LIKE knvv-vkorg MODIF ID b.                "Sales Organisation
+PARAMETERS     : p_soff LIKE knvv-vkbur MODIF ID b.                "Sales Office
+SELECT-OPTIONS : s_cust FOR  knvv-kunnr MODIF ID b.                "Customer No
+SELECT-OPTIONS : s_cdat FOR  knvv-erdat MODIF ID b.                "Date on Record Created
+
+PARAMETERS     : p_down LIKE rlgrap-filename MODIF ID b
+                  DEFAULT 'c:\temp\Customer Master.xls'.           "Download File Path
+SELECTION-SCREEN : END OF BLOCK 002.
+*----------------------------------------------------------------------*
+*  AT SELECTION-SCREEN OUTPUT                                                    *
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+*Inactive Fields depending on the radio button
+  LOOP AT SCREEN.
+    IF p_r1 = 'X'.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r2 = 'X'.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get file name for download
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_down.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_down
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*----------------------------------------------------------------------*
+* Start of Selection                                                   *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+*if Upload is executed validate fields
+  IF p_r1 = 'X'.
+*Validating Session name
+    IF p_sess IS INITIAL.
+      MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating Session mode
+    IF p_mode IS INITIAL.
+      MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+
+*Adding the intial line of the xls.
+  PERFORM intial_line.
+*If download is Executed  validate fields
+  IF p_r2 = 'X'.
+**Validating Company code
+*    IF p_com IS INITIAL.
+*      MESSAGE 'Please Fill the Company Code' TYPE 'S' DISPLAY LIKE 'E'.
+*      EXIT.
+*    ENDIF.
+*Validating result file path
+    IF p_down IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    TRANSLATE p_down TO LOWER CASE.
+*Validation for Download
+    PERFORM validate_download.
+    IF v_flag1 = 'X'.
+      CLEAR v_flag1.
+      EXIT.
+    ENDIF.
+*Fetch data from the database for Download
+    PERFORM fetch_data.
+    IF t_outdat[] IS NOT INITIAL.
+*Download fuction
+      PERFORM download_data.
+    ENDIF.
+  ENDIF.
+
+*Upload Data and validate data
+  IF p_r1 EQ 'X'.
+    TRANSLATE p_upl TO LOWER CASE.
+*Upload to internal table
+    PERFORM upload_file USING p_upl.
+*If no records in Internal table
+    IF t_indata[] IS INITIAL .
+      WRITE: / 'No records were uploaded'.
+      ULINE.
+      EXIT.
+    ENDIF.
+*Validate Fields before uploading
+    PERFORM valaidate_fields.
+  ENDIF.
+* If test Only parameter is not checked
+  IF p_test IS INITIAL
+     AND p_r1 EQ 'X'.
+    LOOP AT t_indata.
+      PERFORM create_cust.
+    ENDLOOP.
+*If Any errors in Bdc Transfer to Session
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+  ENDIF.
+*Write Function Depending on upload or download
+  IF p_r1 EQ 'X'.
+    WRITE: /01      text-001 ,
+            30        ':',
+            31      sy-repid,
+*          92      text-001,
+            92      sy-pagno,
+           /01      text-003,
+            10      'by',
+            30      ':',
+            31      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    IF t_err[] IS NOT INITIAL.
+      WRITE: /01     text-005,
+              25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+      ULINE.
+      SKIP 2.
+    ENDIF.
+    WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+    IF p_test IS INITIAL.
+      WRITE: / 'TOTAL CUSTOMERS CREATED',    28 tot-ok.
+      WRITE: / 'TOTAL CUSTOMERS IN ERROR',   28 tot-err.
+    ELSE.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL RECORDS SUCCESS',    28 tot-ok.
+      WRITE: / 'TOTAL RECORDS ERROR',   28 tot-err.
+    ENDIF.
+  ELSE.
+    WRITE: /01      text-002,
+            30       ':',
+            31      sy-repid,
+*          80      text-001,
+            92      sy-pagno,
+           /01      text-004,
+            10      'by',
+            30      ':',
+            31      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    IF v_flag NE 'X'.
+      IF t_outdat[] IS NOT INITIAL.
+        WRITE : /01 'Successfully Download'.
+        WRITE: /01     text-005,
+                30     p_down.
+      ELSE.
+        WRITE : /01 'No Record to Process'.
+      ENDIF.
+      SKIP 1.
+    ELSE.
+      CLEAR v_flag.
+      WRITE : /01 'Error in Downloading the File'.
+    ENDIF.
+    ULINE.
+    SKIP 1.
+  ENDIF.
+*----------------------------------------------------------------------*
+* End of Selection                                                  *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+*Sorting the Success and error files in a internal table
+  IF p_r1 = 'X' AND t_err[] IS NOT INITIAL.
+    SORT t_err BY sort.
+    READ TABLE t_err INDEX 1.
+    IF t_err-sort = 'A'.
+      CLEAR : t_err.
+      t_err-bukrs = 'Success'.
+      INSERT t_err INTO t_err INDEX 1.
+    ENDIF.
+    READ TABLE t_err WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_err.
+      t_err-bukrs = 'Errors'.
+      INSERT t_err INTO t_err INDEX g_init.
+      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+
+************************************************************************
+*                              SUBROUTINES                             *
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Uploads the file from the workstation using the standard SAP
+*       function module WS_UPLOAD.
+*----------------------------------------------------------------------*
+FORM upload_file USING infile.
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+     i_line_header              = p_head
+      i_tab_raw_data             = it_raw
+      i_filename                 = p_upl
+    TABLES
+      i_tab_converted_data       = t_indata
+   EXCEPTIONS
+     conversion_failed          = 1
+     OTHERS                     = 2
+            .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                               " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_CUST
+*&---------------------------------------------------------------------*
+*       Calls the transaction to create the customer and checks to see
+*       if it is successful or not.
+*----------------------------------------------------------------------*
+FORM create_cust.
+  CLEAR: err_msg,
+         batch_name,
+         t_err,
+         messtab,
+         messtab[].
+  PERFORM do_xd01_by_calltran
+                     TABLES inrec
+*                    using 'N'         "Tran mode A E N (background)
+*                    using 'A'         "all screen
+                     USING 'E'         "show errors only
+                           err_msg
+                           batch_name
+                           sap_cusno.
+*  PERFORM get_status.
+ENDFORM.                               " CREATE_CUST
+*&---------------------------------------------------------------------*
+*&      Form  DO_XD01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*       Fill all the screen with the data from the input file and
+*       call transaction XD01 using the subroutine from the common
+*       interface programs include program.
+*----------------------------------------------------------------------*
+FORM do_xd01_by_calltran TABLES   inrec        STRUCTURE inrec
+                         USING    tran_mode    TYPE c
+                                  err_msg      TYPE c
+                                  batch_mode   TYPE c
+                                  sap_cusno    LIKE kna1-kunnr.
+
+  DATA: zzret_code LIKE sy-subrc.
+
+  PERFORM process_screen_100.          " initial screen
+  PERFORM process_screen_110.          " address details
+  PERFORM process_screen_120.          " control data
+  PERFORM process_screen_125.
+  PERFORM process_screen_130.          " payment transactions
+  PERFORM process_screen_340.
+  PERFORM process_screen_360.          " contact person
+  IF t_indata-bukrs IS NOT INITIAL.
+    PERFORM process_screen_210.          " account information
+    PERFORM process_screen_215.          " payment data
+    PERFORM process_screen_220.          " correspondence
+    PERFORM process_screen_230.
+  ENDIF.
+  IF   t_indata-vkorg IS NOT INITIAL
+  AND  t_indata-vtweg IS NOT INITIAL
+  AND  t_indata-spart  IS NOT INITIAL.
+    PERFORM process_screen_310.          " sales
+    PERFORM process_screen_315.          " shipping
+    PERFORM process_screen_320.          " billing
+    PERFORM process_screen_tax.          " taxes
+    PERFORM process_screen_324.          " partner functions
+  ENDIF.
+  PERFORM save_and_post.               " save and post
+  CALL TRANSACTION 'XD01' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+  IF sy-subrc NE 0.
+    zzret_code = sy-subrc.
+*If error in upload move to session
+    IF v_open NE 'X'.
+      v_open = 'X'.
+      PERFORM bdc_open_group USING p_sess.
+    ENDIF.
+    PERFORM bdc_insert USING 'XD01'.
+  ELSE.
+    zzret_code = 0.
+  ENDIF.
+
+  READ TABLE messtab WITH  KEY msgtyp = 'E'.
+  IF sy-subrc =  0.
+    ADD 1 TO tot-err.
+*Error File
+    MOVE-CORRESPONDING t_indata TO t_err .
+    t_err-sort = 'B'.
+*Get the Error details
+    PERFORM format_message.
+    APPEND t_err.
+  ELSE.
+    ADD 1 TO tot-ok.
+*Success Message
+    MOVE-CORRESPONDING t_indata TO t_err.
+*    READ TABLE messtab WITH  KEY msgtyp = 'S'.
+*    CONCATENATE messtab-msgv1 messtab-msgv2 messtab-msgv3 messtab-msgv4
+*               INTO t_err-desc .
+**    READ TABLE messtab WITH  KEY msgtyp = 'S'.
+**    t_err-kunnr = messtab-msgv1.
+    t_err-sort = 'A'.
+    APPEND t_err.
+  ENDIF.
+
+  REFRESH bdcdata.
+* use the msg number of the message from successful creation
+
+
+ENDFORM.                               " DO_XD01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*       This is the initial screen of transaction XD01 -
+*       create customer centrally.
+*----------------------------------------------------------------------*
+FORM process_screen_100.
+  DATA: l_ktokd(4) TYPE n.
+  IF t_indata-ktokd CO '0123456789 '.
+    l_ktokd = t_indata-ktokd.
+    t_indata-ktokd = l_ktokd.
+  ENDIF.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0100'.
+  PERFORM: bdc_field USING 'RF02D-BUKRS' t_indata-bukrs,
+           bdc_field USING 'RF02D-VKORG' t_indata-vkorg,
+           bdc_field USING 'RF02D-VTWEG' t_indata-vtweg,
+           bdc_field USING 'RF02D-SPART' t_indata-spart,
+           bdc_field USING 'RF02D-KTOKD' t_indata-ktokd,
+           bdc_field USING 'RF02D-KUNNR' ' ', "indata-knb1_altkn,
+           bdc_field USING 'USE_ZAV'     'X',
+           bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*       This screen contains all the address details.
+*----------------------------------------------------------------------*
+FORM process_screen_110.
+  DATA: l_pstlz(4) TYPE n,
+*        l_spras(2) TYPE c,
+        l_pstlz1(6) TYPE n.
+  TRANSLATE t_indata-land1 TO UPPER CASE.
+  IF  t_indata-pstlz CO '0123456789 '.
+    IF t_indata-land1 EQ 'AU'.
+      l_pstlz = t_indata-pstlz.
+      t_indata-pstlz = l_pstlz.
+    ENDIF.
+    IF  t_indata-land1 EQ 'IN'.
+      l_pstlz1 = t_indata-pstlz.
+      t_indata-pstlz = l_pstlz1.
+    ENDIF.
+  ENDIF.
+
+*Conversion routine for language
+  CALL FUNCTION 'CONVERSION_EXIT_ISOLA_INPUT'
+   EXPORTING
+     input                  = t_indata-spras
+  IMPORTING
+     output                 = t_indata-spras
+*  EXCEPTIONS
+*    UNKNOWN_LANGUAGE       = 1
+*    OTHERS                 = 2
+                    .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+*  IF t_indata-pfach NE space.
+*    t_indata-pstl2 = t_indata-pstlz.
+*  ENDIF.
+
+*  PERFORM bdc_dynpro USING 'SAPMF02D'    '0110'.
+*  PERFORM: bdc_field USING 'KNA1-ANRED' t_indata-anred,
+*           bdc_field USING 'KNA1-NAME1' t_indata-name1,
+*           bdc_field USING 'KNA1-SORTL' t_indata-sortl,
+*           bdc_field USING 'KNA1-NAME2' t_indata-name2,
+*           bdc_field USING 'ADDR1_DATA-STR_SUPPL1' t_indata-sret2,
+*           bdc_field USING 'KNA1-STRAS' t_indata-stras,
+*           bdc_field USING 'KNA1-PFACH' t_indata-pfach,  "RD
+*           bdc_field USING 'KNA1-ORT02' t_indata-ort02,   "RD
+*           bdc_field USING 'KNA1-ORT01' t_indata-ort01,
+*           bdc_field USING 'KNA1-PSTLZ' t_indata-pstlz,
+**           BDC_FIELD USING 'KNA1-ORT02' INDATA-KNA1_ORT02,
+*           bdc_field USING 'KNA1-PFORT' t_indata-pfort,
+*           bdc_field USING 'KNA1-PSTL2' t_indata-pstl2,
+*           bdc_field USING 'KNA1-LAND1' t_indata-land1,
+*           bdc_field USING 'KNA1-REGIO' t_indata-regio,
+*           bdc_field USING 'KNA1-SPRAS' t_indata-spras,
+*           bdc_field USING 'KNA1-TELF1' t_indata-telf1,
+*           bdc_field USING 'KNA1-TELFX' t_indata-telfx,
+*           bdc_field USING 'KNA1-TELF2' t_indata-telf2,
+*           bdc_field USING 'BDC_OKCODE' '/00'.    "Continue
+
+  PERFORM bdc_dynpro USING 'SAPMF02D'                 '0111'.
+  PERFORM: bdc_field USING 'SZA1_D0100-TITLE_MEDI'    t_indata-anred,
+           bdc_field USING 'ADDR1_DATA-NAME1'         t_indata-name1,
+           bdc_field USING 'ADDR1_DATA-SORT1'         t_indata-sortl,
+           bdc_field USING 'ADDR1_DATA-NAME2'         t_indata-name2,
+           bdc_field USING 'ADDR1_DATA-STR_SUPPL1'    t_indata-sret2,
+           bdc_field USING 'ADDR1_DATA-STREET'        t_indata-stras,
+           bdc_field USING 'ADDR1_DATA-PO_BOX'        t_indata-pfach,  "RD
+           bdc_field USING 'ADDR1_DATA-CITY2'         t_indata-ort02,   "RD
+           bdc_field USING 'ADDR1_DATA-CITY1'         t_indata-ort01,
+           bdc_field USING 'ADDR1_DATA-POST_CODE1'    t_indata-pstlz,
+           bdc_field USING 'ADDR1_DATA-TRANSPZONE'    t_indata-lzone,
+
+*           BDC_FIELD USING 'KNA1-ORT02' INDATA-KNA1_ORT02,
+           bdc_field USING 'ADDR1_DATA-PO_BOX_LOC'    t_indata-pfort,
+           bdc_field USING 'ADDR1_DATA-POST_CODE2'    t_indata-pstl2,
+           bdc_field USING 'ADDR1_DATA-COUNTRY'       t_indata-land1,
+           bdc_field using 'ADDR1_DATA-TRANSPZONE'    t_indata-tzone,
+           bdc_field using 'ADDR1_DATA-REGIOGROUP'    t_indata-rstrg,
+           bdc_field USING 'ADDR1_DATA-REGION'        t_indata-regio,
+           bdc_field USING 'ADDR1_DATA-LANGU'         t_indata-spras,
+           bdc_field USING 'SZA1_D0100-TEL_NUMBER'    t_indata-telf1,
+           bdc_field USING 'SZA1_D0100-FAX_NUMBER'    t_indata-telfx,
+           bdc_field USING 'BDC_OKCODE'               '/00',   "Continue
+           bdc_field using 'BDC_OKCODE'               '=$MTE'.
+
+ perform  bdc_dynpro using 'SAPLSZA6'                 '0200'.
+ perform   bdc_field using 'BDC_CURSOR'               'ADTEL-TEL_NUMBER(01)'.
+ perform   bdc_field using 'BDC_OKCODE'               '=NEWL'.
+ perform  bdc_dynpro using 'SAPLSZA6'                 '0200'.
+ PERFORM   bdc_field using 'BDC_CURSOR'               'ADTEL-TEL_NUMBER(01)'.
+ perform   bdc_field using 'BDC_OKCODE'               '=CONT'.
+ perform   bdc_field using 'ADTEL-TEL_NUMBER(01)'     t_indata-telf2.
+ perform  bdc_dynpro using 'SAPMF02D'                 '0111'.
+ PERFORM   bdc_field using 'BDC_OKCODE'               '=$MTE'.
+ perform   bdc_field USING 'BDC_OKCODE'               '/00'.    "Continue
+
+*Conversion routine for language
+  CALL FUNCTION 'CONVERSION_EXIT_ISOLA_OUTPUT'
+   EXPORTING
+     input                  = t_indata-spras
+  IMPORTING
+     output                 = t_indata-spras
+*  EXCEPTIONS
+*    UNKNOWN_LANGUAGE       = 1
+*    OTHERS                 = 2
+                    .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                               " PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_120
+*&---------------------------------------------------------------------*
+*       This screen contains the transport zone field.
+*----------------------------------------------------------------------*
+FORM process_screen_120.
+*  IF NOT INDATA-KNA1_STCEG IS INITIAL.                "RD
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0120'.
+  PERFORM: bdc_field USING 'KNA1-STCEG'  t_indata-stceg,
+*           bdc_field USING 'KNA1-LZONE'  t_indata-lzone,
+           bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+*  ENDIF.                                             "RD
+ENDFORM.                               " PROCESS_SCREEN_120
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_130
+*&---------------------------------------------------------------------*
+*       This screen contains all the bank details.
+*----------------------------------------------------------------------*
+FORM process_screen_130.
+
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0130'.
+  IF t_indata-banks NE space.                               " 0004
+    SELECT SINGLE * FROM bnka WHERE bankl = t_indata-bankl.
+    IF sy-subrc EQ 0.
+      PERFORM:
+               bdc_field USING 'KNBK-BANKS(01)' t_indata-banks,
+               bdc_field USING 'KNBK-BANKL(01)' t_indata-bankl,
+               bdc_field USING 'KNBK-BANKN(01)' t_indata-bankn,
+               bdc_field USING 'KNBK-BKONT(01)' t_indata-bkont,
+               bdc_field USING 'KNBK-BVTYP(01)' t_indata-bvtyp,
+               bdc_field USING 'KNBK-BKREF(01)' t_indata-bkref,
+               bdc_field USING 'KNBK-XEZER(01)' t_indata-xezer.
+      PERFORM  bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+    ELSE.
+      PERFORM:
+               bdc_field USING 'KNBK-BANKS(01)' t_indata-banks,
+               bdc_field USING 'KNBK-BANKL(01)' t_indata-bankl,
+               bdc_field USING 'KNBK-BANKN(01)' t_indata-bankn,
+               bdc_field USING 'KNBK-BKONT(01)' t_indata-bkont,
+               bdc_field USING 'KNBK-BVTYP(01)' t_indata-bvtyp,
+               bdc_field USING 'KNBK-BKREF(01)' t_indata-bkref,
+               bdc_field USING 'KNBK-XEZER(01)' t_indata-xezer.
+      PERFORM  bdc_field USING 'BDC_OKCODE' '=ENTR'."Continue
+      PERFORM bdc_dynpro USING 'SAPLBANK'    '0100'.
+      PERFORM  bdc_field USING 'BDC_OKCODE' '=ENTR'."Continue
+      PERFORM bdc_field USING 'BNKA-BANKA' t_indata-bankn.
+      PERFORM bdc_dynpro USING 'SAPMF02D'    '0130'.
+      PERFORM  bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+
+    ENDIF.
+  ELSE.
+    PERFORM  bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+  ENDIF.                                                    " 0004
+
+ENDFORM.                               " PROCESS_SCREEN_130
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_360
+*&---------------------------------------------------------------------*
+*       This screen contains information about the contact person for
+*       the customer such as name, contact phone number, etc.
+*----------------------------------------------------------------------*
+FORM process_screen_360.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0360'.
+  PERFORM:
+           bdc_field USING 'KNVK-NAME1(01)' t_indata-zname1.
+*           BDC_FIELD using 'KNVK-TELF1(01)' indata-knvk_telf1,
+*           BDC_FIELD using 'KNVK-ABTNR(01)' indata-knvk_abtnr,
+*           BDC_FIELD using 'KNVK-NAMEV(01)' indata-knvk_namev,
+*           BDC_FIELD using 'KNVK-ANRED(01)' indata-knvk_anred,
+*           BDC_FIELD using 'KNVK-PAFKT(01)' indata-knvk_pafkt,
+  PERFORM: bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue "0004
+ENDFORM.                               " PROCESS_SCREEN_360
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_210
+*&---------------------------------------------------------------------*
+*       This screen contains accounting information - reconciliation
+*       account number, sorting key, head office account number and
+*       previous account number.
+*----------------------------------------------------------------------*
+FORM process_screen_210.
+  DATA: l_altkn(10) TYPE n,
+        l_akont(10) TYPE n,
+        l_zuawa(3)  TYPE n.
+  IF t_indata-akont CO '1234567890 '.
+    l_akont = t_indata-akont.
+    t_indata-akont = l_akont.
+  ENDIF.
+  IF t_indata-altkn CO '1234567890 '.
+    l_altkn = t_indata-altkn.
+    t_indata-altkn = l_altkn.
+  ENDIF.
+  IF t_indata-zuawa CO '1234567890 '.
+    l_zuawa = t_indata-zuawa.
+    t_indata-zuawa = l_zuawa.
+  ENDIF.
+
+  IF NOT  t_indata-akont IS INITIAL.        "RD
+    PERFORM bdc_dynpro USING 'SAPMF02D'    '0210'.
+    PERFORM: bdc_field USING 'KNB1-AKONT' t_indata-akont,
+             bdc_field USING 'KNB1-ZUAWA' t_indata-zuawa,
+             bdc_field USING 'KNB1-KNRZE' t_indata-knrze,
+             bdc_field USING 'KNB1-ALTKN' t_indata-altkn,
+             bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+  ENDIF.
+ENDFORM.                               " PROCESS_SCREEN_210
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_215
+*&---------------------------------------------------------------------*
+*       This screen contains information about the payment: payment
+*       term, terms of payment key for bill of exchange charges,
+*       payment method,  indicator for send payment advices by EDI etc
+*----------------------------------------------------------------------*
+FORM process_screen_215.
+  DATA: l_zterm(4) TYPE n.
+  if t_indata-zzterm is NOT INITIAL.
+  IF t_indata-zterm CO '1234567890 '.
+    l_zterm = t_indata-zterm.
+    t_indata-zterm = l_zterm.
+  ENDIF.
+  ENDIF.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0215'.
+  PERFORM: bdc_field USING 'KNB1-ZTERM' t_indata-zterm,
+           bdc_field USING 'KNB1-XZVER' t_indata-xzver,
+*          BDC_FIELD using 'KNB1-XEDIP' indata-knb1_xedip,
+           bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_215
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_220
+*&---------------------------------------------------------------------*
+*       This screen contains information about the correspondence:
+*       account number at customer, customer user etc.
+*-----------------------------------------------------------------r ---*
+FORM process_screen_220.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0220'.
+  PERFORM: bdc_field USING 'KNB1-EIKTO' t_indata-eikto,
+           bdc_field USING 'KNB1-ZSABE' t_indata-zsabe,
+           bdc_field USING 'KNB1-KVERM' t_indata-kverm,
+           bdc_field USING 'KNB1-XAUSZ' t_indata-xausz,
+           bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_220
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_310
+*&---------------------------------------------------------------------*
+*       This screen contains sales information: sales district, sales
+*       office, sales group, customer group, currency, etc.
+*----------------------------------------------------------------------*
+FORM process_screen_310.
+  DATA: l_pltyp(2) TYPE n,
+        l_konda(2) TYPE n.
+  if t_indata-pltyp is NOT INITIAL.
+  IF t_indata-pltyp CO '0123456789 '.
+    l_pltyp = t_indata-pltyp.
+    t_indata-pltyp = l_pltyp.
+  ENDIF.
+  ENDIF.
+*  if indata-knvv_KONDA co '0123456789 '.
+*    l_KONDA = indata-knvv_KONDA.
+*    indata-knvv_KONDA = l_KONDA.
+*  endif.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0310'.
+  PERFORM: bdc_field USING 'KNVV-BZIRK' t_indata-bzirk,
+           bdc_field USING 'KNVV-VKBUR' t_indata-vkbur,
+           bdc_field USING 'KNVV-VKGRP' t_indata-vkgrp,
+           bdc_field USING 'KNVV-KDGRP' t_indata-cusgr,
+           bdc_field USING 'KNVV-WAERS' t_indata-waers,
+           bdc_field USING 'KNVV-AWAHR' t_indata-awahr,
+*           bdc_field using 'KNVV-KDGRP' t_indata-cusgr,
+           bdc_field USING 'KNVV-BEGRU' t_indata-begru,
+           bdc_field USING 'KNVV-VSORT' t_indata-vsort,
+           bdc_field USING 'KNVV-EIKTO' t_indata-zeikto,
+           bdc_field USING 'KNVV-KURST' t_indata-kurst,
+           bdc_field USING 'KNVV-KONDA' t_indata-konda,
+           bdc_field USING 'KNVV-KALKS' t_indata-kalks,
+           bdc_field USING 'KNVV-PLTYP' t_indata-pltyp,
+*           BDC_FIELD USING 'KNVV-VERSG' '1',
+*           bdc_field USING 'KNVV-AGREL' 'X',
+           bdc_field USING 'BDC_OKCODE' '=ZUDA'.    "Continue
+  PERFORM bdc_dynpro USING 'SAPLV02Z'    '0200'.
+*  PERFORM: bdc_field USING 'BDC_OKCODE' '=BACK',
+*           bdc_field USING 'KNVV-KVGR1' t_indata-knvv_kvgr1,
+*           bdc_field USING 'KNVV-KVGR2' t_indata-knvv_kvgr2,
+*           bdc_field USING 'KNVV-KVGR3' t_indata-knvv_kvgr3,
+*           bdc_field USING 'KNVV-KVGR4' t_indata-knvv_kvgr4,
+*           bdc_field USING 'KNVV-KVGR5' t_indata-knvv_kvgr5.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0310'.
+  PERFORM: bdc_field USING 'BDC_OKCODE' '=VW'.
+
+*          BDC_FIELD USING 'BDC_OKCODE' 'VW'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_310
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_315
+*&---------------------------------------------------------------------*
+*       This screen contains shipping information: delivery priority,
+*       shipping condition, delivery plant, order combination allowed
+*       indicator, complete delivery indicator.
+*----------------------------------------------------------------------*
+FORM process_screen_315.
+  DATA: l_vsbed(2) TYPE n.
+  data :l_lprio(2) TYPE c.
+  IF t_indata-vsbed CO '1234567890 '.
+    l_vsbed = t_indata-vsbed.
+    t_indata-vsbed = l_vsbed.
+  ENDIF.
+if t_indata-lprio is not INITIAL.
+   l_lprio = t_indata-lprio.
+ else.
+   clear : l_lprio.
+endif.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0315'.
+  PERFORM: bdc_field USING 'KNVV-LPRIO' l_lprio,
+           bdc_field USING 'KNVV-VSBED' t_indata-vsbed,
+           bdc_field USING 'KNVV-VWERK' t_indata-vwerk,
+           bdc_field USING 'KNVV-KZAZU' t_indata-kzazu,
+*           BDC_FIELD USING 'KNVV-CHSPL' t_indata-CHSPL,  " 0004
+           bdc_field USING 'KNVV-AUTLF' t_indata-autlf,
+           bdc_field USING 'KNVV-KZTLF' t_indata-kztlf,
+           bdc_field USING 'KNVV-ANTLF' t_indata-antlf,
+           bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+ENDFORM.                               " PROCESS_SCREEN_315
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_320
+*&---------------------------------------------------------------------*
+*       This screen contains billing information: manual invoice
+*       maintenance, billing schedule, invoice list schedule etc.
+*----------------------------------------------------------------------*
+FORM process_screen_320.
+  DATA: l_zterm(4) TYPE n,
+        l_ktgrd(2) TYPE n.
+  IF t_indata-ktgrd CO '0123456789 '.
+    l_ktgrd = t_indata-ktgrd.
+    t_indata-ktgrd = l_ktgrd.
+  ENDIF.
+  if t_indata-zzterm is NOT INITIAL.
+  IF t_indata-zzterm CO '0123456789 '.
+    l_zterm = t_indata-zzterm.
+    t_indata-zzterm = l_zterm.
+  ENDIF.
+  ENDIF.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0320'.
+  PERFORM: bdc_field USING 'KNVV-MRNKZ' t_indata-mrnkz,
+           bdc_field USING 'KNVV-PERFK' t_indata-perfk,
+           bdc_field USING 'KNVV-PERRL' t_indata-perrl,
+           bdc_field USING 'KNVV-ZTERM' t_indata-zzterm,
+           bdc_field USING 'KNVV-KTGRD' t_indata-ktgrd,
+*Start of Mod 005
+           bdc_field USING 'KNVV-INCO1' t_indata-inco1,
+           bdc_field USING 'KNVV-INCO2' t_indata-inco2,
+*End of Mod 005
+
+           bdc_field USING 'BDC_OKCODE' 'VW'.    "Continue
+
+ENDFORM.                               " PROCESS_SCREEN_320
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_TAX
+*&---------------------------------------------------------------------*
+*       This screen has the tax details (this is a sneaky hidden screen)
+*----------------------------------------------------------------------*
+FORM process_screen_tax.
+  PERFORM bdc_dynpro USING 'SAPMF02D'  '1350'.
+  PERFORM: bdc_field USING 'KNVI-TAXKD(01)' t_indata-taxk1,
+           bdc_field USING 'KNVI-TAXKD(02)' t_indata-taxk2," INDATA-KNVI_TAXK2,
+           bdc_field USING 'KNVI-TAXKD(03)' t_indata-taxk3," INDATA-KNVI_TAXK2,
+           bdc_field USING 'BDC_OKCODE'     'VW'.
+ENDFORM.                               " PROCESS_SCREEN_TAX
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_324
+*&---------------------------------------------------------------------*
+*       This screen has the Partner functions details.
+*       There is no data being passed to this screen.
+*----------------------------------------------------------------------*
+FORM process_screen_324.
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0324'.
+ENDFORM.                               " PROCESS_SCREEN_324
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_AND_POST
+*&---------------------------------------------------------------------*
+*       Post the transaction and create the customer.
+*----------------------------------------------------------------------*
+FORM save_and_post.
+  PERFORM  bdc_field USING 'BDC_OKCODE' '/11'.    "Post
+ENDFORM.                               " SAVE_AND_POST
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_125
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM process_screen_125 .
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0125'.
+  PERFORM:bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+
+ENDFORM.                    " PROCESS_SCREEN_125
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_340
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM process_screen_340 .
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0340'.
+  PERFORM:bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0370'.
+  PERFORM:bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+
+ENDFORM.                    " PROCESS_SCREEN_340
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_230
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM process_screen_230 .
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0230'.
+  PERFORM:bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+  PERFORM bdc_dynpro USING 'SAPMF02D'    '0610'.
+  PERFORM:bdc_field USING 'BDC_OKCODE'  'VW'.    "Continue
+
+ENDFORM.                    " PROCESS_SCREEN_230
+*&---------------------------------------------------------------------*
+*&      Form  FETCH_DATA
+*&---------------------------------------------------------------------*
+*       Fetch data from the database for Download
+*----------------------------------------------------------------------*
+FORM fetch_data .
+  DATA : l_tabix TYPE sy-tabix.
+  DATA : w_indat LIKE t_indata.
+  DATA : l_init  TYPE i .
+  RANGES : l_sal  FOR knvv-vkorg.
+  RANGES : l_soff FOR knvv-vkbur.
+*  RANGES : l_com  FOR knb1-bukrs.
+
+  IF p_sal IS NOT INITIAL.
+    l_sal-sign   = 'I'.
+    l_sal-option = 'EQ'.
+    l_sal-low    = p_sal.
+    APPEND l_sal.
+  ENDIF.
+
+  IF p_soff IS NOT INITIAL.
+    l_soff-sign   = 'I'.
+    l_soff-option = 'EQ'.
+    l_soff-low    = p_soff.
+    APPEND l_soff.
+  ENDIF.
+
+*  IF p_com IS NOT INITIAL.
+*    l_com-sign   = 'I'.
+*    l_com-option = 'EQ'.
+*    l_com-low   = p_com.
+*    APPEND l_com.
+*  ENDIF.
+
+*Inner Join Company Code and Gendral Master data
+  SELECT a~anred a~ktokd
+         a~name1 a~sortl
+         a~name2 a~stras
+         a~ort01 a~pstlz
+         a~ort02 a~pfach
+         a~pfort a~pstl2
+         a~land1 a~regio
+         a~spras a~telf1
+         a~telfx a~telf2
+         a~stceg a~lzone
+         a~kunnr b~akont
+         b~zuawa b~knrze
+         b~altkn b~zterm
+         b~xzver b~eikto
+         b~zsabe b~kverm
+         b~xausz b~bukrs
+         FROM kna1 AS a
+         LEFT OUTER JOIN knb1 AS b ON a~kunnr = b~kunnr
+         INTO CORRESPONDING FIELDS OF TABLE t_indata
+        WHERE a~erdat IN s_cdat
+        AND   a~kunnr IN s_cust.
+  SORT t_indata BY kunnr.
+  LOOP AT t_indata.
+    CLEAR : knvv.
+*Validate Company Code
+    IF p_com IS NOT INITIAL.
+      IF t_indata-bukrs NE p_com.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+*Other Details
+    PERFORM oth_det.
+
+* fetch Sales Details
+    SELECT * FROM knvv
+             INTO knvv
+            WHERE kunnr = t_indata-kunnr
+            AND   vkorg IN l_sal
+            AND   vkbur IN l_soff.
+      IF l_init = 0.
+        l_init = l_init + 1.
+*Assign Knvv Values
+        PERFORM knvv_values.
+      ELSE.
+        l_tabix = sy-tabix + 1.
+        READ TABLE t_indata INTO w_indat INDEX l_tabix.
+        IF w_indat-kunnr = t_indata-kunnr.
+          DELETE t_indata INDEX l_tabix.
+          MOVE-CORRESPONDING w_indat TO t_indata.
+*Other Details
+          PERFORM oth_det.
+*Assign Knvv Values
+          PERFORM knvv_values.
+        ENDIF.
+      ENDIF.
+      MOVE-CORRESPONDING t_indata TO t_outdat.
+      PERFORM conv_lang.
+      APPEND t_outdat.
+      v_flag2 = 'X'.
+    ENDSELECT.
+    IF   sy-subrc NE 0
+    AND  l_sal[]  IS NOT INITIAL
+    OR   l_soff[] IS NOT INITIAL.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    IF v_flag2 NE 'X'.
+      MODIFY t_indata .
+      MOVE-CORRESPONDING t_indata TO t_outdat.
+*Conversion Routine for language
+      PERFORM conv_lang.
+      APPEND t_outdat.
+    ENDIF.
+    CLEAR : v_flag2,l_init,w_indat,l_tabix.
+  ENDLOOP.
+ENDFORM.                    " FETCH_DATA
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*       Download fuction
+*----------------------------------------------------------------------*
+FORM download_data .
+  DATA : f_string TYPE string.
+  f_string = p_down.
+  w_intial-kunnr = 'CustomerNo'.
+  INSERT w_intial INTO t_outdat INDEX 1.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_outdat[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+    v_flag = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*&      Form  INTIAL_LINE
+*&---------------------------------------------------------------------*
+*       Adding the intial line of the xls
+*----------------------------------------------------------------------*
+FORM intial_line .
+  w_intial-bukrs   = 'Company code'.
+  w_intial-vkorg   = 'Sales organization'.
+  w_intial-vtweg   = 'Dist. Ch'.
+  w_intial-spart   = 'Division'.
+  w_intial-ktokd   = 'Customer Account Group'.
+* Address details
+  w_intial-anred   = 'Title'.
+  w_intial-name1   = 'Name 1'.
+  w_intial-sortl   = 'Search Term'.
+  w_intial-name2   = 'Name 2'.
+  w_intial-sret2   = 'Street2'.
+  w_intial-stras   = 'Street/House No'.
+  w_intial-ort01   = 'City'.
+  w_intial-pstlz   = 'Post Code'.
+  w_intial-ort02   = 'District'.
+  w_intial-pfach   = 'PO BOX'.
+  w_intial-pfort   = 'P.O.Box city'.
+  w_intial-pstl2   = 'P.O.Box city Post Code'.
+  w_intial-land1   = 'Country'.
+  w_intial-tzone   = 'Transportation zone'.
+  w_intial-rstrg   = 'Reg.Struc Group'.
+  w_intial-regio   = 'Region'.
+  w_intial-spras   = 'Language Key'.
+  w_intial-telf1   = 'Telephone 1'.
+  w_intial-telfx   = 'Fax'.
+  w_intial-telf2   = 'Telephone 2'.
+* Control data
+  w_intial-stceg   = 'ABN'.
+  w_intial-lzone   = 'Transport.zone'.
+* Payment transactions
+  w_intial-banks   = 'Bank Details Ctry'.
+  w_intial-bankl   = 'Bank Key'.
+  w_intial-bankn   = 'Bank Account No'.
+  w_intial-bkont   = 'Control Key'.
+  w_intial-bvtyp   = 'Partner Bank Type'.
+  w_intial-bkref   = 'Reference Details'.
+  w_intial-xezer   = 'Collection Indicator'.
+* Contact person details
+  w_intial-zname1  = 'Name of Cust contact'.
+* Accounting information
+  w_intial-akont  = 'Reconcialtion Acc'.
+  w_intial-zuawa  = 'Sort Key'.
+  w_intial-knrze  = 'Head Office Acc No'.
+  w_intial-altkn  = 'Previous Accout Number'.
+* Payment data
+  w_intial-zterm  = 'Payment Terms'.
+  w_intial-xzver  = 'Record Payment History'.
+* Correspondece information
+  w_intial-eikto  = 'Acct at cust.'.
+  w_intial-zsabe  = 'Customer user'.
+  w_intial-kverm  = 'Account memo'.
+  w_intial-xausz  = 'Account Statement'.
+* Sales information
+  w_intial-cusgr  = 'Customer Group'.
+  w_intial-bzirk  = 'Sales District'.
+  w_intial-vkbur  = 'Sales Office'.
+  w_intial-vkgrp  = 'Sales Group'.
+*  w_intial-kdgrp  = 'Customer group'.
+  w_intial-waers  = 'Currency'.
+  w_intial-awahr  = 'Order probab.'.
+  w_intial-begru  = 'AuthorizGroup'.
+  w_intial-vsort  = 'Item proposal'.
+  w_intial-zeikto = 'Acct at cust.'.
+  w_intial-kurst  = 'Exch. Rate Type'.
+  w_intial-konda  = 'Price group'.
+  w_intial-kalks  = 'Cust.pric.proc.'.
+  w_intial-pltyp  = 'Price List Type'.
+* Shipping information
+  w_intial-lprio  = 'Delivery Priority'.
+  w_intial-vsbed  = 'Shipping Conditions'.
+  w_intial-vwerk  = 'Delivering Plant'.
+  w_intial-kzazu  = 'Order Combination Indicator'.
+*    w_intial-chspl  = 'Batch split Indicator'.
+  w_intial-autlf  = 'Complete Delivery'.
+  w_intial-kztlf  = 'Part.dlv./item'.
+  w_intial-antlf  = 'Max.Part.Deliveries'.
+* Billing information
+  w_intial-mrnkz  = 'Manual invoice maintenance'.
+  w_intial-perfk  = 'Invoicing dates'.
+  w_intial-perrl  = 'Inv.list sched'.
+  w_intial-zzterm = 'Payt Terms'.
+  w_intial-ktgrd  = 'AcctAssgGr'.
+  w_intial-taxk1  = 'VAT Tax Classification'.
+  w_intial-taxk2  = 'CST Tax Classification'.
+  w_intial-taxk3  = 'VST Tax Classification'.
+  w_intial-inco1  = 'IncoTerms'.
+  w_intial-inco2  = 'IncoTerms (Part 2)'.
+
+ENDFORM.                    " INTIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    APPEND t_fdown.
+  ENDLOOP.
+  MOVE-CORRESPONDING w_intial TO w_init1.
+  w_init1-desc = 'Description'.
+
+
+  INSERT w_init1 INTO t_fdown INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+    CONCATENATE t_err-desc
+                g_mess
+                ','
+                INTO t_err-desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  VALAIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*       Validate Fields befor uploading
+*----------------------------------------------------------------------*
+FORM valaidate_fields .
+  DATA : v_ship(2) TYPE n,
+         v_pgrp(3) TYPE n,
+         v_vtweg(2) TYPE n,
+         v_spart(2) TYPE n.
+
+  LOOP AT t_indata.
+    ADD 1 TO tot-read.
+    IF t_indata-altkn CO '1234567890 '.
+      v_old_kunnr = t_indata-altkn.
+      t_indata-altkn = v_old_kunnr.
+      MODIFY t_indata.
+    ENDIF.
+
+    IF  t_indata-vtweg CO '1234567890 '
+    AND t_indata-vtweg IS NOT INITIAL.
+      v_vtweg = t_indata-vtweg.
+      t_indata-vtweg = v_vtweg.
+      MODIFY t_indata.
+    ENDIF.
+
+    IF  t_indata-spart CO '1234567890 '
+    AND t_indata-spart IS NOT INITIAL.
+      v_spart = t_indata-spart.
+      t_indata-spart = v_spart.
+      MODIFY t_indata.
+    ENDIF.
+
+*    IF t_indata-vtweg EQ  '0'.
+*      t_indata-vtweg = '00'.
+*      MODIFY t_indata.
+*    ENDIF.
+*
+*    IF t_indata-spart EQ '0'.
+*      t_indata-spart = '00'.
+*      MODIFY t_indata.
+*    ENDIF.
+    TRANSLATE t_indata-bukrs TO UPPER CASE.
+*Validating Customer
+    SELECT SINGLE kunnr FROM knb1 INTO knb1-kunnr
+                        WHERE altkn = t_indata-altkn
+                        AND   bukrs = t_indata-bukrs.
+    IF sy-subrc EQ 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err .
+      t_err-sort = 'B'.
+      t_err-desc = 'Customer Already Created'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+*    IF t_indata-vkgrp IS NOT INITIAL.
+*      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*        EXPORTING
+*          input  = t_indata-vkgrp
+*        IMPORTING
+*          output = t_indata-vkgrp.
+*      MODIFY t_indata.
+**Validating Sales Group
+*      SELECT SINGLE * FROM
+*                      tvbvk
+*                     WHERE vkgrp EQ t_indata-vkgrp.
+*      IF sy-subrc NE 0.
+*        ADD 1 TO tot-err.
+*        MOVE-CORRESPONDING t_indata TO t_err.
+*        t_err-sort = 'B'.
+*        CONCATENATE 'Sales Group'
+*                    t_indata-vkgrp
+*                    'Group Does not Exist in the SAP System'
+*                   INTO t_err-desc
+*                   SEPARATED BY space.
+*        APPEND t_err.
+*        DELETE t_indata.
+*        CONTINUE.
+*      ENDIF.
+*    ENDIF.
+    IF t_indata-cusgr IS NOT INITIAL.
+      TRANSLATE t_indata-cusgr TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = t_indata-cusgr
+        IMPORTING
+          output = t_indata-cusgr.
+      MODIFY t_indata.
+*Validating Customer Group
+      SELECT SINGLE * FROM t151
+                      WHERE kdgrp EQ t_indata-cusgr.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Customer Group'
+                     t_indata-cusgr
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-konda IS NOT INITIAL.
+      TRANSLATE t_indata-konda TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = t_indata-konda
+        IMPORTING
+          output = t_indata-konda.
+      MODIFY t_indata.
+*Validating Price Group
+      SELECT SINGLE * FROM t188
+                      WHERE konda EQ t_indata-konda.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+
+        CONCATENATE  'Price Group'
+                     t_indata-konda
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-kalks IS NOT INITIAL.
+      TRANSLATE t_indata-kalks TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = t_indata-kalks
+        IMPORTING
+          output = t_indata-kalks.
+      MODIFY t_indata.
+*Validating Customer Pricing Procedure
+      SELECT SINGLE * FROM tvkd
+                      WHERE kalks EQ t_indata-kalks.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Customer Pricing Procedure'
+                     t_indata-kalks
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-pltyp IS NOT INITIAL.
+      TRANSLATE t_indata-pltyp TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = t_indata-pltyp
+        IMPORTING
+          output = t_indata-pltyp.
+      MODIFY t_indata.
+*Validating Price List type
+      SELECT SINGLE * FROM t189
+                      WHERE pltyp EQ t_indata-pltyp.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Price List Type'
+                     t_indata-pltyp
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-vkorg IS NOT INITIAL.
+      TRANSLATE t_indata-vkorg TO UPPER CASE.
+*Validating Sales Organisation
+      SELECT SINGLE * FROM tvko
+                      WHERE vkorg EQ t_indata-vkorg.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Sales Organisation'
+                     t_indata-vkorg
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-vkbur IS NOT INITIAL.
+      TRANSLATE t_indata-vkbur TO UPPER CASE.
+*Validating Sales Office
+      SELECT SINGLE * FROM tvbur
+                      WHERE vkbur EQ t_indata-vkbur.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Sales office'
+                     t_indata-vkbur
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-vkgrp IS NOT INITIAL.
+      IF t_indata-vkgrp CO '1234567890 '.
+        v_pgrp = t_indata-vkgrp.
+        t_indata-vkgrp = v_pgrp.
+        MODIFY t_indata.
+      ENDIF.
+*      v_pgrp
+*Validating Sales Group
+      SELECT SINGLE * FROM tvkgr
+                      WHERE vkgrp EQ t_indata-vkgrp.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Sales Group'
+                     t_indata-vkgrp
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+    IF t_indata-vsbed IS NOT INITIAL.
+      IF t_indata-vsbed CO '1234567890 '.
+        v_ship = t_indata-vsbed.
+        t_indata-vsbed = v_ship.
+        MODIFY t_indata.
+      ENDIF.
+*Validating Shipping Conditions
+      SELECT SINGLE * FROM tvsb
+                      WHERE vsbed EQ t_indata-vsbed.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Shipping Conditions'
+                     t_indata-vsbed
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " VALAIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Validation for Download
+*----------------------------------------------------------------------*
+FORM validate_download .
+
+  IF p_com IS NOT INITIAL.
+    TRANSLATE p_com TO UPPER CASE.
+*Validating Company Codes
+    SELECT SINGLE * FROM t001
+                    WHERE bukrs = p_com.
+    IF sy-subrc NE 0.
+      MESSAGE 'Company Code does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+  IF p_sal IS NOT INITIAL.
+    TRANSLATE p_sal TO UPPER CASE.
+*Validating Sales Organisation
+    SELECT SINGLE * FROM tvko
+                    WHERE vkorg EQ p_sal.
+    IF sy-subrc NE 0.
+      MESSAGE 'Sales Organisation Does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+
+  ENDIF.
+  IF p_soff IS NOT INITIAL.
+    TRANSLATE p_soff TO UPPER CASE.
+*Validating Sales Office
+    SELECT SINGLE * FROM tvbur
+                    WHERE vkbur EQ p_soff.
+    IF sy-subrc NE 0.
+      MESSAGE 'Sales office Does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " VALIDATE_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  CONV_LANG
+*&---------------------------------------------------------------------*
+*       Conversion Routine for language
+*----------------------------------------------------------------------*
+FORM conv_lang .
+
+  CALL FUNCTION 'CONVERSION_EXIT_ISOLA_OUTPUT'
+    EXPORTING
+      input                  = t_outdat-spras
+   IMPORTING
+      output                 = t_outdat-spras
+*  EXCEPTIONS
+*    UNKNOWN_LANGUAGE       = 1
+*    OTHERS                 = 2
+                     .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+
+ENDFORM.                    " CONV_LANG
+*&---------------------------------------------------------------------*
+*&      Form  KNVV_VALUES
+*&---------------------------------------------------------------------*
+*       Assign Knvv Values
+*----------------------------------------------------------------------*
+FORM knvv_values .
+  t_indata-vkorg = knvv-vkorg.
+  t_indata-vtweg = knvv-vtweg.
+  t_indata-spart = knvv-spart.
+  t_indata-bzirk = knvv-bzirk.
+  t_indata-vkbur = knvv-vkbur.
+  t_indata-vkgrp = knvv-vkgrp.
+*  t_indata-kdgrp = knvv-kdgrp.
+  t_indata-waers = knvv-waers.
+  t_indata-awahr = knvv-awahr.
+  t_indata-begru = knvv-begru.
+  t_indata-vsort = knvv-vsort.
+  t_indata-kurst = knvv-kurst.
+  t_indata-konda = knvv-konda.
+  t_indata-kalks = knvv-kalks.
+  t_indata-pltyp = knvv-pltyp.
+  t_indata-lprio = knvv-lprio.
+  t_indata-vsbed = knvv-vsbed.
+  t_indata-vwerk = knvv-vwerk.
+  t_indata-kzazu = knvv-kzazu.
+  t_indata-autlf = knvv-autlf.
+  t_indata-kztlf = knvv-kztlf.
+  t_indata-antlf = knvv-antlf.
+  t_indata-mrnkz = knvv-mrnkz.
+  t_indata-perfk = knvv-perfk.
+  t_indata-perrl = knvv-perrl.
+  t_indata-ktgrd = knvv-ktgrd.
+  t_indata-inco1 = knvv-inco1.
+  t_indata-inco2 = knvv-inco2.
+*    MOVE-CORRESPONDING knvv TO t_indata.
+  t_indata-zeikto = knvv-eikto.
+  t_indata-zzterm = knvv-zterm.
+  t_indata-cusgr  = knvv-kdgrp.
+ENDFORM.                    " KNVV_VALUES
+*&---------------------------------------------------------------------*
+*&      Form  OTH_DET
+*&---------------------------------------------------------------------*
+*       Other Details
+*----------------------------------------------------------------------*
+FORM oth_det .
+  DATA : sadr LIKE sadr.
+  DATA : v_adrnr LIKE kna1-adrnr.
+* Fetech the name
+  SELECT SINGLE name1 FROM knvk
+                      INTO  t_indata-zname1
+                     WHERE kunnr = t_indata-kunnr.
+
+  SELECT SINGLE adrnr FROM kna1
+                      INTO  v_adrnr
+                     WHERE kunnr = t_indata-kunnr.
+  SELECT * INTO TABLE t_tax
+           FROM tstl
+          WHERE talnd = 'IN'.
+*          AND   TATYP NE 'JTX1'.
+
+  CLEAR gv_fb_addr_get_selection.
+  CLEAR sadr.
+  gv_fb_addr_get_selection-addrnumber = v_adrnr.            "SADR40A
+  CALL FUNCTION 'ADDR_GET'
+    EXPORTING
+      address_selection = gv_fb_addr_get_selection
+      address_group     = 'CA01'
+    IMPORTING
+      sadr              = sadr
+    EXCEPTIONS
+      OTHERS            = 01.
+  IF sy-subrc NE 0.
+    CLEAR sadr.
+  else.
+  t_indata-sret2 =  sadr-STRS2.
+  t_indata-tzone = sadr-lzone.
+  if sadr-lzone ca 'S'.
+    t_indata-rstrg = 'SOUTH'.
+  ELSEIF sadr-lzone ca 'W'.
+    t_indata-rstrg = 'WEST'.
+  ELSEIF sadr-lzone ca 'E'.
+    t_indata-rstrg = 'EAST'.
+  ELSEIF sadr-lzone ca 'N'.
+    t_indata-rstrg = 'NORTH'.
+  endif.
+  ENDIF.
+
+  LOOP AT t_tax.
+    CASE t_tax-lfdnr.
+*      WHEN 1.
+
+      WHEN 1.
+        SELECT SINGLE taxkd  FROM knvi
+                             INTO t_indata-taxk1
+                            WHERE kunnr = t_indata-kunnr
+                            AND   tatyp = t_tax-tatyp.
+      WHEN 2.
+        SELECT SINGLE taxkd  FROM knvi
+                             INTO t_indata-taxk2
+                            WHERE kunnr = t_indata-kunnr
+                            AND   tatyp = t_tax-tatyp.
+      WHEN 3.
+        SELECT SINGLE taxkd  FROM knvi
+                             INTO t_indata-taxk3
+                            WHERE kunnr = t_indata-kunnr
+                            AND   tatyp = t_tax-tatyp.
+    ENDCASE.
+
+  ENDLOOP.
+**Fetch the tax details
+*    SELECT SINGLE taxkd FROM knvi
+*                        INTO t_indata-taxk1
+*                       WHERE kunnr = t_indata-kunnr.
+**                       and   TATYP = 'J1AU'.
+
+*Payment Details
+  SELECT SINGLE * FROM  knbk
+                        INTO CORRESPONDING FIELDS OF t_indata
+                       WHERE kunnr = t_indata-kunnr
+                       AND   banks = t_indata-land1.
+ENDFORM.                    " OTH_DET

@@ -1,0 +1,1688 @@
+
+REPORT  ZM_MATERIAL_UPLOAD NO STANDARD PAGE HEADING
+*                            MESSAGE-ID zm
+                            LINE-SIZE  100
+                            LINE-COUNT 65.
+************************************************************************
+* This program uploads a flat file from the PC and creates materials   *
+* based on the data uploaded by calling transaction MM01.              *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 30.12.2008 | Suresh.G      | Initial program              *
+************************************************************************
+*Tables
+TABLES : mara,   "General Material Data
+         marc,   "Plant Data for Material
+         mard,   "Storage Location Data for Material
+         marm,   "Units of Measure for Material
+         makt,   "Material Descriptions
+         mvke,   "Sales Data for Material
+         t134,   "Material Types
+         t001w,  "Plants/Branches
+         t006,   "Units of Measurement
+         t001l,  "Storage Locations
+         tvko,   "Organizational Unit: Sales Organizations
+         t023,   "Material Groups
+         t179,   "Materials: Product Hierarchies
+         cepc.   "Profit Center Master Data Table
+*Type-pools
+TYPE-POOLS : truxs.
+DATA: it_raw TYPE truxs_t_text_data.
+* format of the input file
+DATA: BEGIN OF t_indata OCCURS 0,
+      matnr      TYPE mara-matnr,        "Material Number
+      mtart      TYPE mara-mtart,        "Material Type
+      mbrsh      TYPE mara-mbrsh,        "Industry Sector
+      werks      TYPE marc-werks,        "Plant
+      lgort      TYPE mard-lgort,        "Storage Location
+      vkorg      TYPE mvke-vkorg,        "Sales Organization
+      vtweg      TYPE mvke-vtweg,        "Distribution Channel
+      maktx      TYPE makt-maktx,        "Material Description (Short Text)
+      spras      TYPE makt-spras,        "Language Key
+*      Basic Data1 view
+      meins      TYPE mara-meins,        "Base Unit of Measure
+      bismt      TYPE mara-bismt,        "Old material number
+      spart      TYPE mara-spart,        "Division
+      matkl      TYPE mara-matkl,        "Material Group
+      prdha      TYPE mara-prdha,        "Product hierarchy
+      mtpos_mara TYPE mara-mtpos_mara,   "General item category group
+      brgew      TYPE mara-brgew,        "Gross Weight
+      gewei      TYPE mara-gewei,        "Weight Unit
+      ntgew      TYPE mara-ntgew,        "Net Weight
+      volum      TYPE mara-volum,        "Volume
+      voleh      TYPE mara-voleh,        "Volume unit
+      groes      TYPE mara-groes,        "Size/dimensions
+*      Sales:sales.org.1 view
+      dwerk      TYPE mvke-dwerk,        "Delivering Plant (Own or External)
+      taxm1      TYPE mlan-taxm1,        "Tax classification material
+*      aland      TYPE mlan-aland,        "Tax Country
+*      tatyp      TYPE knvi-tatyp,        "Tax Category
+      taxm2      TYPE mlan-taxm1,        "Tax classification material
+      taxm3      TYPE mlan-taxm1,        "Tax classification material
+*      Sales:sales.org.2 view
+      ktgrm      TYPE  mvke-ktgrm,       "Account assignment group for this material
+      mvgr2      TYPE  mvke-mvgr2,       "Material group 2
+      mvgr3      TYPE  mvke-mvgr3,       "Material group 3
+      mtpos      TYPE  mvke-mtpos,       "Item category group from material master
+*      Sales:General/Plant view
+      mtvfp      TYPE marc-mtvfp,        "Checking Group for Availability Check
+      tragr      TYPE mara-tragr,        "Transportation Group
+      ladgr      TYPE marc-ladgr,        "Loading Group
+      prctr      TYPE marc-prctr,        "profit Center
+*      Purchasing view
+      ekgrp      TYPE marc-ekgrp,        "Purchasing Group
+*      MRP1 view
+      dismm      TYPE marc-dismm,        "MRP Type
+*      MPR2 view
+      beskz      TYPE marc-beskz,        "Procurement Type
+*      Purchasing View
+      ekwsl      TYPE mara-ekwsl,        "Purchasing Value Key
+*      MRP1 view
+      dispo      TYPE marc-dispo,        "MRP Controller (Materials Planner)
+      disls      TYPE marc-disls,        "Lot size (materials planning)
+*      MRP2 view
+      dzeit     TYPE  marc-dzeit,        "In-house production time
+      minbe     TYPE  marc-minbe,        "Reorder Point
+      plifz     TYPE  marc-plifz,        "Planned Delivery Time in Days
+      fhori     TYPE  marc-fhori,        "Scheduling Margin Key for Floats
+*      Accounting 1 View
+      bklas     TYPE mbew-bklas,         "Valuation Class
+      vprsv     TYPE mbew-vprsv,         "Price control indicator
+      peinh     TYPE mbew-peinh,         "Price Unit
+      verpr     TYPE mbew-verpr,         "Moving Average Price/Periodic Unit Price
+      stprs     TYPE mbew-stprs,         "Standard price
+      END OF t_indata.
+*Format for Download file
+DATA: BEGIN OF t_outdat OCCURS 0,
+      matnr(18)         TYPE c,        "Material Number
+      mtart(12)         TYPE c,        "Material Type
+      mbrsh(15)         TYPE c,        "Industry Sector
+      werks(5)          TYPE c,        "Plant
+      lgort(20)         TYPE c,        "Storage Location
+      vkorg(22)         TYPE c,        "Sales Organization
+      vtweg(23)         TYPE c,        "Distribution Channel
+      maktx(20)         TYPE c,        "Material Description (Short Text)
+      spras(15)         TYPE c,        "Language Key
+*      Basic Data1 view
+      meins(25)         TYPE c,        "Base Unit of Measure
+      bismt(23)         TYPE c,        "Old material number
+      spart(10)         TYPE c,        "Division
+      matkl(15)         TYPE c,        "Material Group
+      prdha(20)         TYPE c,        "Product hierarchy
+      mtpos_mara(15)    TYPE c,        "General item category group
+      brgew(12)         TYPE c,        "Gross Weight
+      gewei(12)         TYPE c,        "Weight Unit
+      ntgew(12)         TYPE c,        "Net Weight
+      volum(6)          TYPE c,        "Volume
+      voleh(10)         TYPE c,        "Volume unit
+      groes(15)         TYPE c,        "Size/dimensions
+*      Sales:sales.org.1 view
+      dwerk(15)         TYPE c,        "Delivering Plant (Own or External)
+      taxm1(20)         TYPE c,        "Tax classification material
+*      aland(20)         TYPE c,        "Tax Country
+*      tatyp(20)    TYPE c,        "Tax Category
+      taxm2(20)         TYPE c,
+      taxm3(20)         TYPE c,
+*      Sales:sales.org.2 view
+      ktgrm(25)         TYPE c,        "Account assignment group for this material
+      mvgr2(25)         TYPE c,        "Material group 2
+      mvgr3(25)         TYPE c,        "Material group 3
+      mtpos(25)         TYPE c,        "Item category group from material master
+*      Sales:General/Plant view
+      mtvfp(20)         TYPE c,        "Checking Group for Availability Check
+      tragr(10)         TYPE c,        "Transportation Group
+      ladgr(10)         TYPE c,        "Loading Group
+      prctr(15)         TYPE c,        "Profit Center
+*      Purchasing view
+      ekgrp(15)         TYPE c,        "Purchasing Group
+*      MRP1 view
+      dismm(10)         TYPE c,        "MRP Type
+*      MPR2 view
+      beskz(20)         TYPE c,        "Procurement Type
+*      Purchasing View
+      ekwsl(25)         TYPE c,        "Purchasing Value Key
+*      MRP1 view
+      dispo(15)         TYPE c,        "MRP Controller (Materials Planner)
+      disls(10)         TYPE c,        "Lot size (materials planning)
+*      MRP2 view
+      dzeit(20)         TYPE c,        "In-house production time
+      minbe(15)         TYPE c ,        "Reorder Point
+      plifz(25)         TYPE c,        "Planned Delivery Time in Days
+      fhori(20)         TYPE c,        "Scheduling Margin Key for Floats
+*      Accounting 1 View
+      bklas(15)         TYPE c,        "Valuation Class
+      vprsv(15)         TYPE c,        "Price control indicator
+      peinh(10)         TYPE c,        "Price Unit
+      verpr(15)         TYPE c,        "Moving Average Price/Periodic Unit Price
+      stprs(15)         TYPE c,        "Standard price
+      END OF t_outdat.
+
+DATA: headdata             LIKE bapimathead,  "Header Segment with Control Information
+      clientdata           LIKE bapi_mara,    "Material Data at Client Level
+      clientdatax          LIKE bapi_marax,   "Checkbox Structure for BAPI_MARA
+      plantdata            LIKE bapi_marc,    "Material Data at Plant Level
+      plantdatax           LIKE bapi_marcx,   "Checkbox Structure for BAPI_MARC
+      return               LIKE bapiret2,     "
+      salesdata            LIKE bapi_mvke,    "Sales Data
+      salesdatax           LIKE bapi_mvkex,   "Checkbox Structure for BAPI_MVKE
+      valuationdata        LIKE bapi_mbew,    "Valuation Data
+      valuationdatax       LIKE bapi_mbewx,   "Checkbox Structure for BAPI_MBEW
+      storageloc           LIKE bapi_mard,    "Storage Type Data
+      storagelocx          LIKE bapi_mardx.   "Checkbox Structure for BAPI_MLGT
+
+DATA: uom     TYPE STANDARD TABLE OF bapi_marm       WITH HEADER LINE, "Units of Measure
+      uomx    TYPE STANDARD TABLE OF bapi_marmx      WITH HEADER LINE, "Checkbox Structure for BAPI_MARM
+      desc    TYPE STANDARD TABLE OF bapi_makt       WITH HEADER LINE, "Material Descriptions
+      tax     TYPE STANDARD TABLE OF bapi_mlan       WITH HEADER LINE, "Substitute Structure for Return Parameter BAPIRET2
+      ret     TYPE STANDARD TABLE OF bapi_matreturn2 .                 "Return parameters
+
+
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+
+DATA :BEGIN OF  t_err  OCCURS 0.
+INCLUDE  STRUCTURE t_outdat.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : END OF t_err.
+DATA : t_ddown LIKE t_indata OCCURS 0 WITH HEADER LINE.
+DATA : w_initial LIKE t_outdat.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_initial.
+DATA : desc TYPE string.
+DATA : END OF w_init1.
+*Final internal table for Download
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_flag1 TYPE c.
+DATA : v_flag2,
+       v_flag3,
+       v_flag4,
+       g_wait   LIKE bapita-wait VALUE 1.
+*----------------------------------------------------------------------*
+*  Selection Screen                                                    *
+*----------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS       : p_r1 RADIOBUTTON GROUP rad
+                        USER-COMMAND clk DEFAULT 'X'.            " upload Radio Button
+SELECTION-SCREEN COMMENT 5(35) text-003.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a           "Upload File
+                         DEFAULT 'c:\temp\parbmat.xls',
+            p_werks     like t001w-werks MODIF ID a,
+            p_mhdrz     like mara-mhdrz modif id a,
+            p_mhdhb     like mara-mhdhb modif id a,
+            p_head      AS CHECKBOX MODIF ID a,                   "Header Line
+            p_test      AS CHECKBOX MODIF ID a.                   " test run? X or Y for yes
+
+PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a           "Dwonload File Path
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS : p_r2 RADIOBUTTON GROUP rad.
+SELECTION-SCREEN COMMENT 5(35) text-004.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-002.
+PARAMETERS     : p_plant  LIKE marc-werks MODIF ID b.                "Plant
+PARAMETERS     : p_lgort  LIKE mard-lgort MODIF ID b.                "Storage Location
+PARAMETERS     : p_vkorg  LIKE mvke-vkorg MODIF ID b.                "Sales Organization
+PARAMETERS     : p_vtweg  LIKE mvke-vtweg MODIF ID b.                "Distribution Channel
+SELECT-OPTIONS : s_mat FOR  mara-matnr MODIF ID b.                  "Material No No
+SELECT-OPTIONS : s_dat FOR  mara-ersda MODIF ID b.                  "Date on Record Created
+
+PARAMETERS     : p_down LIKE rlgrap-filename MODIF ID b
+                  DEFAULT 'c:\temp\Material Master.xls'.           "Download File Path
+SELECTION-SCREEN : END OF BLOCK 002.
+*----------------------------------------------------------------------*
+*  AT SELECTION-SCREEN OUTPUT                                                    *
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+*Inactive Fields depending on the radio button
+  LOOP AT SCREEN.
+    IF p_r1 = 'X'.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r2 = 'X'.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get file name for download
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_down.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_down
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*----------------------------------------------------------------------*
+* Start of Selection                                                   *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+*Adding the intial line of the xls.
+  PERFORM intial_line.
+  IF p_r2 = 'X'.
+*Validating Company code
+    IF p_plant IS INITIAL.
+      MESSAGE 'Please Fill the Plant' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating result file path
+    IF p_down IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    TRANSLATE p_down TO LOWER CASE.
+*Validation for Download
+    PERFORM validate_download.
+    IF v_flag1 = 'X'.
+      CLEAR v_flag1.
+      EXIT.
+    ENDIF.
+*Fetch data from the database for Download
+    PERFORM fetch_data.
+    IF t_outdat[] IS NOT INITIAL.
+*Download fuction
+      PERFORM data_original.
+      PERFORM download_data.
+    ENDIF.
+  ENDIF.
+
+*Upload Data and validate data
+  IF p_r1 EQ 'X'.
+    IF p_upl IS INITIAL.
+      MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating Download File Path
+    IF p_rest IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating The Plant
+    if p_werks is initial.
+      MESSAGE 'Please Fill Plant' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+    TRANSLATE p_upl TO LOWER CASE.
+*Upload to internal table
+    PERFORM upload_file USING p_upl.
+    IF v_flag2 EQ 'X'.
+      CLEAR : v_flag2.
+      WRITE: /01      text-001 ,
+           27        ':',
+           30      sy-repid,
+*          92      text-001,
+           92      sy-pagno,
+          /01      text-003,
+           10      'by',
+           27      ':',
+           30      sy-uname,
+           82      sy-datum DD/MM/YY,
+           92      sy-uzeit.
+
+      ULINE.
+      SKIP 1.
+      ULINE.
+      WRITE : 'Error in Uploading the File'.
+      ULINE.
+      EXIT.
+    ENDIF.
+*If no records in Internal table
+    IF t_indata[] IS INITIAL .
+      WRITE: / 'No records were uploaded'.
+      ULINE.
+      EXIT.
+    ENDIF.
+*Validate Fields before uploading
+    PERFORM validate_fields.
+  ENDIF.
+* If test Only parameter is not checked
+  IF p_test IS INITIAL
+     AND p_r1 EQ 'X'.
+    LOOP AT t_indata where werks eq p_werks.
+      PERFORM master_clear.
+      PERFORM create_mat.
+    ENDLOOP.
+  ENDIF.
+*
+*----------------------------------------------------------------------*
+* End of Selection                                                  *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+*Sorting the Success and error files in a internal table
+  IF p_r1 = 'X' AND t_err[] IS NOT INITIAL.
+    PERFORM original_format.
+    SORT t_err BY sort.
+    READ TABLE t_err INDEX 1.
+    IF t_err-sort = 'A'.
+      CLEAR : t_err.
+      t_err-matnr = 'Success'.
+      INSERT t_err INTO t_err INDEX 1.
+    ENDIF.
+    READ TABLE t_err WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_err.
+      t_err-matnr = 'Errors'.
+      INSERT t_err INTO t_err INDEX g_init.
+      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+*  Write Function Depending on upload or download
+  IF p_r1 EQ 'X' AND v_flag2 NE 'X'.
+    WRITE: /01      text-001 ,
+            22        ':',
+            23      sy-repid,
+*          92      text-001,
+            92      sy-pagno,
+           /01      text-003,
+            10      'by',
+            22      ':',
+            23      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+*    if t_err[] is not initial.
+*             WRITE: /01     text-005,
+*                25     p_rest.
+*    endif.
+    SKIP 1.
+    IF v_flag4 EQ 'X'.
+      CLEAR v_flag4.
+      WRITE : /01 'Error in Downloading the File'.
+      ULINE.
+*    EXIT.
+    ELSE.
+      IF  p_test IS INITIAL.
+        WRITE: /01     text-005,
+                25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+      ELSEIF p_test  IS NOT INITIAL
+         AND t_err[] IS NOT INITIAL.
+        WRITE: /01     text-005,
+                25     p_rest.
+      ENDIF.
+    ENDIF.
+    ULINE.
+    SKIP 2.
+    WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+    IF p_test IS INITIAL.
+      WRITE: / 'TOTAL MATERIALS CREATED',    28 tot-ok.
+      WRITE: / 'TOTAL MATERIALS IN ERROR',   28 tot-err.
+    ELSE.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL RECORDS SUCCESS',    28 tot-ok.
+      WRITE: / 'TOTAL RECORDS ERROR',   28 tot-err.
+    ENDIF.
+  ELSE.
+    WRITE: /01      text-002,
+            22       ':',
+            23      sy-repid,
+*          80      text-001,
+            92      sy-pagno,
+           /01      text-004,
+            10      'by',
+            22      ':',
+            23      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    IF v_flag NE 'X'.
+      IF t_outdat[] IS NOT INITIAL.
+        WRITE : /01 'Successfully Download'.
+        WRITE: /01     text-005,
+                30     p_down.
+      ELSE.
+        WRITE : /01 'No Record to Process'.
+      ENDIF.
+      SKIP 1.
+    ELSE.
+      CLEAR v_flag.
+      WRITE : /01 'Error in Downloading the File'.
+    ENDIF.
+    ULINE.
+    SKIP 1.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  INTIAL_LINE
+*&---------------------------------------------------------------------*
+*        Adding the intial line of the xls
+*----------------------------------------------------------------------*
+
+FORM intial_line .
+  w_initial-matnr        = 'Material Number'.                 "Material Number
+  w_initial-mtart        = 'Material Type'.                   "Material Type
+  w_initial-mbrsh        = 'Industry Sector '.                "Industry Sector
+  w_initial-werks        = 'Plant'.                           "Plant
+  w_initial-lgort        = 'Storage Location'.                "Storage Location
+  w_initial-vkorg        = 'Sales Organization'.              "Sales Organization
+  w_initial-vtweg        = 'Distribution Channel'.            "Distribution Channel
+  w_initial-maktx        = 'Description'.                     "Material Description (Short Text)
+  w_initial-spras        = 'Language Key'.
+*      Basic Data1 view
+  w_initial-meins        = 'Base Unit Of Measure'.            "Base Unit of Measure
+  w_initial-bismt        = 'Old Material Number'.             "Old material number
+  w_initial-spart        = 'Division'.
+  w_initial-matkl        = 'Material Group'.                  "Material Group
+  w_initial-prdha        = 'Product Hierarchy'.               "Product hierarchy
+  w_initial-mtpos_mara   = 'GenItemCatGroup'.                 "General item category group
+  w_initial-brgew        = 'Gross Weight' .                   "Gross Weight
+  w_initial-gewei        = 'Weight Unit'.                     "Weight Unit
+  w_initial-ntgew        = 'Net Weight'.                      "Net Weight
+  w_initial-volum        = 'Volume'.                          "Volume
+  w_initial-voleh        = 'Volume Unit'.                     "Volume unit
+  w_initial-groes        = 'Size/Dimensions'.                 "Size/dimensions
+*      Sales:sales.org.1 view
+  w_initial-dwerk        = 'Delivering Plant'.                "Delivering Plant (Own or External)
+  w_initial-taxm1        = ' VAT Tax Classification'.              "Tax classification material
+*  w_initial-aland        = 'Tax Country'.                     "Tax Country
+*  w_initial-tatyp        = 'Tax Category'.                    "Tax Category
+  w_initial-taxm2        = ' CST Tax Classification'.                     "Tax Country
+  w_initial-taxm3        = 'LST Tax Classification '.                    "Tax Category
+*      Sales:sales.org.2 view
+  w_initial-ktgrm        = 'Acct Assignment Grp'.             "Account assignment group for this material
+  w_initial-mvgr2        = 'Material Group 2'.                "Material group 2
+  w_initial-mvgr3        = 'Material Group 3'.                "Material group 3
+  w_initial-mtpos        = 'Item Category Group'.             "Item category group from material master
+*      Sales:General/Plant view
+  w_initial-mtvfp        = 'Availability Check'.              "Checking Group for Availability Check
+  w_initial-tragr        = 'Trans.Grp'.                       "Transportation Group
+  w_initial-ladgr        = 'Loading Grp'.                     "Loading Group
+  w_initial-prctr        = 'Profit Center'.                   "Profit Center
+*      Purchasing view
+  w_initial-ekgrp        = 'Purchasing Group'.                "Purchasing Group
+*      MRP1 view
+  w_initial-dismm        = 'MRP Type'.                        "MRP Type
+*      MPR2 view
+  w_initial-beskz        = 'Procurement Type'.                "Procurement Type
+*      Purchasing View
+  w_initial-ekwsl        = 'Purchasing Value Key'.            "Purchasing Value Key
+*      MRP1 view
+  w_initial-dispo        = 'MRP Controller'.                  "MRP Controller (Materials Planner)
+  w_initial-disls        = 'Lot Size'.                        "Lot size (materials planning)
+*      MRP2 view
+  w_initial-dzeit        = 'In House production'.             "In-house production time
+  w_initial-minbe        = 'Reorder Point'.                   "Reorder Point
+  w_initial-plifz        = 'Planned Delivery Time'.           "Planned Delivery Time in Days
+  w_initial-fhori        = 'SchedMargin Key'.                 "Scheduling Margin Key for Floats
+*      Accounting 1 View
+  w_initial-bklas        = 'Valuation Class'.                 "Valuation Class
+  w_initial-vprsv        = 'Price Control'.                   "Price control indicator
+  w_initial-peinh        = 'Price Unit'.                      "Price Unit
+  w_initial-verpr        = 'Moving Price'.                    "Moving Average Price/Periodic Unit Price
+  w_initial-stprs        = 'Standard Price'.                  "Standard price
+ENDFORM.                    " INTIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Uploads the file from the workstation using the standard SAP
+*       function module WS_UPLOAD.
+*----------------------------------------------------------------------*
+
+FORM upload_file  USING    p_p_upl.
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+      i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_upl
+     TABLES
+       i_tab_converted_data       = t_indata
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag2 = 'X'.
+  ENDIF.
+ENDFORM.                    " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*       Validating The Fields Before Creating The Material
+*----------------------------------------------------------------------*
+
+FORM validate_fields .
+  DATA: l_matnr(18) TYPE n.
+  DATA: l_lgort(4)  TYPE n.
+  DATA: l_vtweg(2)  TYPE n,
+        l_matkl(2)  TYPE n,
+        l_tragr(4)  TYPE n,
+        l_spart(2)  TYPE n,
+        l_ladgr(4)  TYPE n,
+        l_dispo(3)  TYPE n,
+        l_fhori(3)  TYPE n,
+        l_ktgrm(2)  TYPE n,
+        l_prdha(18) TYPE n,
+        l_ekgrp(3)  TYPE n,
+        l_mtvfp(2)  TYPE n,
+        l_mvgr2(3)  TYPE n,
+        l_mvgr3(3)  TYPE n,
+        l_prctr(10) TYPE n.
+  LOOP AT t_indata where werks eq p_werks.
+    CLEAR: l_matnr,
+           l_lgort,
+           l_vtweg,
+           l_matkl,
+           l_tragr,
+           l_spart,
+           l_ladgr,
+           l_dispo,
+           l_fhori.
+    ADD 1 TO tot-read.
+    TRANSLATE t_indata-matnr TO UPPER CASE.
+    IF NOT t_indata-matnr IS INITIAL.
+      IF t_indata-matnr CO '0123456789 '.
+        l_matnr        = t_indata-matnr.
+        t_indata-matnr = l_matnr.
+        modify t_indata.
+      ENDIF.
+    elseif t_indata-matnr is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Material Number'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+* Validating the Material Type
+    if not t_indata-mtart is initial.
+      TRANSLATE t_indata-mtart TO UPPER CASE.
+      SELECT SINGLE mtart FROM t134 INTO t134
+                          WHERE mtart = t_indata-mtart.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Material Type'
+                     t_indata-mtart
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    elseif t_indata-mtart is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Material Type'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+* Validating the Plant
+    if not t_indata-werks is initial.
+      TRANSLATE t_indata-werks TO UPPER CASE.
+      SELECT SINGLE werks FROM t001w INTO t001w
+                          WHERE werks = t_indata-werks.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Plant'
+                     t_indata-werks
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    elseif t_indata-werks is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Plant'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+* Validating the Base Unit of Measurement
+    if t_indata-meins is not initial.
+      TRANSLATE t_indata-meins TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+        EXPORTING
+          input                = t_indata-meins
+*       LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_indata-meins
+       EXCEPTIONS
+         UNIT_NOT_FOUND       = 1
+         OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      modify t_indata.
+    endif.
+    if t_indata-meins is not initial.
+      SELECT SINGLE msehi FROM t006 INTO t006
+                          WHERE msehi = t_indata-meins.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Base Unit of Measurement'
+                     t_indata-meins
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    elseif t_indata-meins is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Base Unit Of Measurement'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+* Validating the Storage Location
+    TRANSLATE t_indata-lgort TO UPPER CASE.
+    IF NOT t_indata-lgort IS INITIAL.
+      IF t_indata-lgort CO '0123456789 '.
+        l_lgort        = t_indata-lgort.
+        t_indata-lgort = l_lgort.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+    if t_indata-lgort is not initial.
+      SELECT SINGLE lgort FROM t001l INTO t001l
+                          WHERE lgort = t_indata-lgort.
+
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Storage Location'
+                     t_indata-lgort
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    endif.
+*Validating the Sales Organization
+    if t_indata-vkorg is not initial.
+      TRANSLATE t_indata-vkorg TO UPPER CASE.
+      SELECT SINGLE vkorg FROM tvko INTO tvko
+                          WHERE vkorg = t_indata-vkorg.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Sales Organization'
+                     t_indata-vkorg
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    endif.
+* Validating the Distribution Channel
+    if t_indata-vtweg is not initial.
+      TRANSLATE t_indata-vtweg TO UPPER CASE.
+      IF NOT t_indata-vtweg IS INITIAL.
+        IF t_indata-vtweg CO '0123456789 '.
+          l_vtweg        = t_indata-vtweg.
+          t_indata-vtweg = l_vtweg.
+          MODIFY t_indata.
+        ENDIF.
+
+      ENDIF.
+    endif.
+* Validating the material Group
+    TRANSLATE t_indata-matkl TO UPPER CASE.
+    IF NOT t_indata-matkl IS INITIAL.
+      IF t_indata-matkl CO '0123456789 '.
+        l_matkl        = t_indata-matkl.
+        t_indata-matkl = l_matkl.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+    IF NOT t_indata-matkl is initial.
+      SELECT SINGLE matkl FROM t023 INTO t023
+                              WHERE matkl = t_indata-matkl.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Material Group'
+                     t_indata-matkl
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    endif.
+* Validating the Material Group 2
+    if not t_indata-mvgr2 is initial.
+      if t_indata-mvgr2 co '0123456789 '.
+        l_mvgr2         = t_indata-mvgr2.
+        t_indata-mvgr2  = l_mvgr2.
+        MODIFY t_indata.
+      endif.
+    endif.
+* Validating the Material Group 3
+    if not t_indata-mvgr3 is initial.
+      if t_indata-mvgr3 co '0123456789 '.
+        l_mvgr3         = t_indata-mvgr3.
+        t_indata-mvgr3  = l_mvgr3.
+        MODIFY t_indata.
+      endif.
+    endif.
+* Validating the Transportation Group
+    TRANSLATE t_indata-tragr TO UPPER CASE.
+    IF NOT t_indata-tragr IS INITIAL.
+      IF t_indata-tragr CO '0123456789 '.
+        l_tragr        = t_indata-tragr.
+        t_indata-tragr = l_tragr.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the Division
+    TRANSLATE t_indata-spart TO UPPER CASE.
+    IF NOT t_indata-spart IS INITIAL.
+      IF t_indata-spart CO '0123456789 '.
+        l_spart        = t_indata-spart.
+        t_indata-spart = l_spart.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the Division
+    TRANSLATE t_indata-ladgr TO UPPER CASE.
+    IF NOT t_indata-ladgr IS INITIAL.
+      IF t_indata-ladgr CO '0123456789 '.
+        l_ladgr        = t_indata-ladgr.
+        t_indata-ladgr = l_ladgr.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the MPR Controller
+    TRANSLATE t_indata-dispo TO UPPER CASE.
+    IF NOT t_indata-dispo IS INITIAL.
+      IF t_indata-dispo CO '0123456789 '.
+        l_dispo        = t_indata-dispo.
+        t_indata-dispo = l_dispo.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the Scheduled Margin Key
+    TRANSLATE t_indata-fhori TO UPPER CASE.
+    IF NOT t_indata-fhori IS INITIAL.
+      IF t_indata-fhori CO '0123456789 '.
+        l_fhori        = t_indata-fhori.
+        t_indata-fhori = l_fhori.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the Account Assignment Group
+    TRANSLATE t_indata-ktgrm TO UPPER CASE.
+    IF NOT t_indata-ktgrm IS INITIAL.
+      IF t_indata-ktgrm CO '0123456789 '.
+        l_ktgrm        = t_indata-ktgrm.
+        t_indata-ktgrm = l_ktgrm.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+* Validating the Product Hierarchy
+    TRANSLATE t_indata-prdha TO UPPER CASE.
+    IF NOT t_indata-prdha IS INITIAL.
+*      CONCATENATE '00'
+*                   t_indata-prdha
+*                   INTO
+*                   t_indata-prdha.
+*      MODIFY t_indata.
+      SELECT SINGLE PRODH FROM t179 INTO T179
+                                  WHERE PRODH = t_indata-PRDHA.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Product Hierarchy'
+                     t_indata-prdha
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+*      IF t_indata-prdha CO '0123456789 '.
+*        l_prdha        = t_indata-prdha.
+*        t_indata-prdha = l_prdha.
+*      ENDIF.
+*      MODIFY t_indata.
+    ENDIF.
+
+* Validating the Purchasing Group
+    TRANSLATE t_indata-ekgrp TO UPPER CASE.
+    IF NOT t_indata-ekgrp IS INITIAL.
+      IF t_indata-ekgrp CO '0123456789 '.
+        l_ekgrp        = t_indata-ekgrp.
+        t_indata-ekgrp = l_ekgrp.
+        MODIFY t_indata.
+      ENDIF.
+
+    ENDIF.
+*Validating The Volume Unit
+    TRANSLATE t_indata-voleh TO UPPER CASE.
+    IF NOT t_indata-voleh IS INITIAL.
+
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+        EXPORTING
+          input                = t_indata-voleh
+*    LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_indata-voleh
+  EXCEPTIONS
+    UNIT_NOT_FOUND       = 1
+    OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_indata.
+    ENDIF.
+
+*Validating The Weight Unit
+    TRANSLATE t_indata-gewei TO UPPER CASE.
+    IF NOT t_indata-gewei IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+      EXPORTING
+        input                = t_indata-gewei
+*    LANGUAGE             = SY-LANGU
+     IMPORTING
+       output               = t_indata-gewei
+  EXCEPTIONS
+    UNIT_NOT_FOUND       = 1
+    OTHERS               = 2
+              .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_indata.
+    ENDIF.
+* Validating the Availability Check
+    TRANSLATE t_indata-mtvfp TO UPPER CASE.
+    IF NOT t_indata-mtvfp IS INITIAL.
+      IF t_indata-mtvfp CO '0123456789 '.
+        l_mtvfp        = t_indata-mtvfp.
+        t_indata-mtvfp = l_mtvfp.
+        MODIFY t_indata.
+      ENDIF.
+    ENDIF.
+*Validating the Profit Center
+    if not t_indata-prctr is initial.
+      if t_indata-prctr co '0123456789 '.
+        l_prctr        = t_indata-prctr.
+        t_indata-prctr = l_prctr.
+        modify t_indata.
+      endif.
+      SELECT SINGLE prctr FROM cepc INTO cepc
+                          WHERE prctr = t_indata-prctr.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Profit Center'
+                     t_indata-prctr
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    endif.
+  ENDLOOP.
+ENDFORM.                    " VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_MAT
+*&---------------------------------------------------------------------*
+*       Bapi Call For Creating The material
+*----------------------------------------------------------------------*
+
+FORM create_mat .
+* Filling Headdata.
+  MOVE: t_indata-matnr TO headdata-material,
+*          '3'          TO headdata-ind_sector,
+        t_indata-mtart TO headdata-matl_type,
+        t_indata-mbrsh TO headdata-ind_sector,
+        'X'            TO headdata-basic_view,
+        'X'            TO headdata-STORAGE_VIEW.
+  if t_indata-mtart ne 'ROH'.
+    MOVE:  'X'            TO headdata-sales_view,
+           'X'            TO headdata-mrp_view.
+  ENDIF.
+  MOVE:   'X'            TO headdata-purchase_view,
+          'X'            TO headdata-account_view.
+* Filling Clientdata.
+
+  MOVE: t_indata-gewei      TO clientdata-unit_of_wt,
+        t_indata-tragr      TO clientdata-trans_grp,
+        t_indata-meins      TO clientdata-base_uom,
+        t_indata-bismt      TO clientdata-old_mat_no,
+*          '0002'           TO clientdata-MINREMLIFE,
+*          '0003'           TO clientdata-SHELF_LIFE,
+        t_indata-ntgew      TO clientdata-net_weight,
+        t_indata-matkl      TO clientdata-matl_group,
+        t_indata-maktx      TO clientdata-std_descr,
+        t_indata-spart      TO clientdata-division,
+        t_indata-mtpos_mara TO clientdata-item_cat,
+        t_indata-groes      TO clientdata-size_dim,
+        t_indata-ekwsl      TO clientdata-pur_valkey,
+        t_indata-prdha      TO clientdata-prod_hier,
+        'X'                 TO clientdata-batch_mgmt.
+
+        if not p_mhdrz is initial.
+     move :  p_mhdrz        TO     clientdata-MINREMLIFE.
+        endif.
+
+        if not p_mhdhb is initial.
+     move :  p_mhdhb             to clientdata-SHELF_LIFE .
+        endif.
+*          '0001'           to clientdata-TRANS_GRP,
+*          'X'              to clientdata-BATCH_MGMT.
+* Filling Clientdatax.
+
+
+
+
+
+  MOVE: 'X'     TO clientdatax-unit_of_wt,
+        'X'     TO clientdatax-trans_grp,
+        'X'     TO clientdatax-base_uom,
+        'X'     TO clientdatax-old_mat_no,
+        'X'     TO clientdatax-net_weight,
+        'X'     TO clientdatax-matl_group,
+        'X'     TO clientdatax-std_descr,
+        'X'     TO clientdatax-division,
+        'X'     TO clientdatax-item_cat,
+        'X'     TO clientdatax-size_dim,
+        'X'     TO clientdatax-pur_valkey,
+        'X'     TO clientdatax-prod_hier,
+        'X'     TO clientdatax-batch_mgmt.
+        if not p_mhdrz is initial.
+     move : 'X' TO clientdatax-minremlife.
+        endif.
+
+        if not p_mhdhb is initial.
+    move :  'X' TO clientdatax-SHELF_LIFE .
+        endif.
+
+* Filling PlantData.
+*  DATA : v_reorder(10).
+*  v_reorder = '1000'.
+  MOVE: t_indata-werks TO plantdata-plant,
+        t_indata-ekgrp TO plantdata-pur_group,
+        t_indata-dismm TO plantdata-mrp_type,
+        t_indata-dispo TO plantdata-mrp_ctrler,
+        t_indata-plifz TO plantdata-plnd_delry,
+        t_indata-disls TO plantdata-lotsizekey,
+        t_indata-beskz TO plantdata-proc_type,
+        t_indata-dzeit TO plantdata-inhseprodt,
+        t_indata-minbe TO plantdata-reorder_pt,
+        t_indata-ladgr TO plantdata-loadinggrp,
+        t_indata-mtvfp TO plantdata-availcheck,
+        t_indata-fhori TO plantdata-sm_key,
+        t_indata-prctr to plantdata-profit_ctr,
+        'X'            TO plantdata-batch_mgmt.
+* Filling PlantDatax.
+  MOVE: t_indata-werks TO plantdatax-plant,
+        'X'            TO plantdatax-pur_group,
+        'X'            TO plantdatax-mrp_type,
+        'X'            TO plantdatax-mrp_ctrler,
+        'X'            TO plantdatax-plnd_delry,
+        'X'            TO plantdatax-lotsizekey,
+        'X'            TO plantdatax-proc_type,
+        'X'            TO plantdatax-inhseprodt,
+        'X'            TO plantdatax-reorder_pt,
+        'X'            TO plantdatax-loadinggrp,
+        'X'            TO plantdatax-availcheck,
+        'X'            TO plantdatax-sm_key,
+        'X'            TO plantdatax-profit_ctr,
+        'X'            TO plantdatax-batch_mgmt.
+* Filling Storagelocationdata.
+  MOVE: t_indata-werks TO storageloc-plant,
+        t_indata-lgort TO storageloc-stge_loc.
+* Filling Storagelocationdatax.
+  MOVE: t_indata-werks TO storagelocx-plant,
+        t_indata-lgort TO storagelocx-stge_loc.
+* Filling ValuationData.
+  MOVE: t_indata-werks TO valuationdata-val_area,
+        t_indata-verpr TO valuationdata-moving_pr,
+        t_indata-stprs TO valuationdata-std_price,
+        t_indata-peinh TO valuationdata-price_unit,
+        t_indata-bklas TO valuationdata-val_class,
+        t_indata-vprsv TO valuationdata-price_ctrl.
+* Filling ValuationDatax.
+  MOVE: t_indata-werks TO valuationdatax-val_area,
+        'X'            TO valuationdatax-moving_pr,
+        'X'            TO valuationdatax-std_price,
+        'X'            TO valuationdatax-price_unit,
+        'X'            TO valuationdatax-val_class,
+        'X'            TO valuationdatax-price_ctrl.
+* Filling SalesData.
+  MOVE: t_indata-vkorg TO salesdata-sales_org,
+        t_indata-vtweg TO salesdata-distr_chan,
+        t_indata-dwerk TO salesdata-delyg_plnt,
+        t_indata-prdha TO salesdata-prod_hier,
+        t_indata-ktgrm TO salesdata-acct_assgt,
+        t_indata-mvgr2 to salesdata-MATL_GRP_2,
+        t_indata-mvgr3 to salesdata-MATL_GRP_3,
+        t_indata-mtpos TO salesdata-item_cat.
+* Filling SalesDatax.
+  MOVE: t_indata-vkorg TO salesdatax-sales_org,
+        t_indata-vtweg TO salesdatax-distr_chan,
+       'X'             TO salesdatax-delyg_plnt,
+       'X'             TO salesdatax-prod_hier,
+       'X'             TO salesdatax-acct_assgt,
+       'X'             TO salesdatax-MATL_GRP_2,
+       'X'             TO salesdatax-MATL_GRP_3,
+       'X'             TO salesdatax-item_cat.
+* Filling MAKT Table.
+  MOVE: t_indata-maktx TO desc-matl_desc,
+*   materialdescription-langu           = 'EN'.
+        t_indata-spras TO desc-langu.
+  APPEND desc.
+* Filling UOM Table
+  MOVE: t_indata-volum TO uom-volume,
+        t_indata-voleh TO uom-volumeunit,
+        t_indata-brgew TO uom-gross_wt,
+        t_indata-gewei TO uom-unit_of_wt,
+        t_indata-meins TO uom-alt_unit.
+  APPEND uom.
+* Filling UOMx Table
+  MOVE: 'X' TO uomx-volume,
+        'X' TO uomx-volumeunit,
+        'X' TO uomx-gross_wt,
+        'X' TO uomx-unit_of_wt,
+        t_indata-meins TO uomx-alt_unit.
+  APPEND uomx.
+* Filling Tax Classification Table
+  DATA: BEGIN OF i_tstl OCCURS 10.
+          INCLUDE STRUCTURE tstl.
+  DATA: END OF i_tstl.
+  DATA: v_land1 LIKE t001w-land1.
+
+  SELECT SINGLE * FROM t001w
+  WHERE werks = T_INDATA-werks.
+  MOVE t001w-land1 TO v_land1.
+  SELECT * INTO i_tstl FROM tstl
+  WHERE talnd = v_land1.
+    APPEND i_tstl.
+    CLEAR i_tstl.
+  ENDSELECT.
+  loop at i_tstl.
+*    READ TABLE i_tstl WITH KEY lfdnr = sy-index.
+*    IF sy-subrc <> 0.
+*      EXIT.
+*    ENDIF.
+    TAX-depcountry = v_land1.
+
+    if i_tstl-lfdnr = 1.
+      TAX-taxclass_1 = T_INDATA-taxm1.
+      TAX-tax_type_1 = i_tstl-tatyp.
+    elseif i_tstl-lfdnr = 2.
+      TAX-taxclass_2 = T_INDATA-taxm2.
+      TAX-tax_type_2 = i_tstl-tatyp.
+    elseif i_tstl-lfdnr = 3.
+      TAX-taxclass_3 = T_INDATA-taxm3.
+      TAX-tax_type_3 = i_tstl-tatyp.
+    endif.
+*      AT LAST.
+    APPEND TAX.
+    CLEAR TAX.
+*    ENDAT.
+  ENDLOOP.
+*    TAX-taxclass_1 = T_INDATA-taxm1.
+*    TAX-taxclass_2 = T_INDATA-taxm2.
+*    TAX-taxclass_3 = T_INDATA-taxm3.
+*    append tax.
+*  Call Bapi.
+  CALL FUNCTION 'BAPI_MATERIAL_SAVEDATA'
+    EXPORTING
+      headdata             = headdata
+      clientdata           = clientdata
+      clientdatax          = clientdatax
+      plantdata            = plantdata
+      plantdatax           = plantdatax
+      salesdata            = salesdata
+      salesdatax           = salesdatax
+      valuationdata        = valuationdata
+      valuationdatax       = valuationdatax
+     storagelocationdata   = storageloc
+     storagelocationdatax  = storagelocx
+*     warehousenumberdata  = warehousenumberdata          "0002
+*     warehousenumberdatax = warehousenumberdatax         "0002
+    IMPORTING
+      return               = return
+    TABLES
+      materialdescription  = desc
+      unitsofmeasure       = uom
+      unitsofmeasurex      = uomx
+      taxclassifications   = tax
+      returnmessages       = ret.
+  IF return-type EQ 'E'.
+    ADD 1 TO tot-err.
+*Error File
+    MOVE-CORRESPONDING t_indata TO t_err .
+    t_err-sort = 'B'.
+    t_err-desc = return-message.
+    APPEND t_err.
+  ELSE.
+    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' .
+*    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+*     EXPORTING
+*     WAIT           = G_WAIT.
+** IMPORTING
+** RETURN        =
+*WAIT UNTIL .
+*    COMMIT WORK AND WAIT.
+    ADD 1 TO tot-ok.
+*Success Message
+    MOVE-CORRESPONDING t_indata TO t_err.
+    t_err-sort = 'A'.
+    t_err-desc = return-message.
+    APPEND t_err.
+  ENDIF.
+
+
+ENDFORM.                    " CREATE_MAT
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*        Download error and Success files
+*----------------------------------------------------------------------*
+
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    APPEND t_fdown.
+  ENDLOOP.
+  MOVE-CORRESPONDING w_initial TO w_init1.
+  w_init1-desc = 'Description'.
+
+  INSERT w_init1 INTO t_fdown INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag4 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Validating the fields for download
+*----------------------------------------------------------------------*
+
+FORM validate_download .
+  IF NOT p_plant IS INITIAL.
+    TRANSLATE p_plant TO UPPER CASE.
+*Validating plant
+    SELECT SINGLE * FROM t001w
+                    WHERE werks = p_plant.
+    IF sy-subrc NE 0.
+      MESSAGE 'Plant does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+  IF NOT p_lgort IS INITIAL.
+    TRANSLATE p_lgort TO UPPER CASE.
+    SELECT SINGLE lgort FROM t001l INTO t001l
+                           WHERE lgort = p_lgort.
+    IF sy-subrc NE 0.
+      MESSAGE 'Storage Location does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+  IF NOT p_vkorg IS INITIAL.
+    TRANSLATE p_vkorg TO UPPER CASE.
+    SELECT SINGLE vkorg FROM tvko INTO tvko
+                           WHERE vkorg = p_vkorg.
+    IF sy-subrc NE 0.
+      MESSAGE 'Sales Organization does not Exist in the SAP System' TYPE 'S' DISPLAY LIKE 'E'.
+      v_flag1 = 'X'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " VALIDATE_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  FETCH_DATA
+*&---------------------------------------------------------------------*
+*         Fetch data from the database for Download
+*----------------------------------------------------------------------*
+
+FORM fetch_data .
+  RANGES : l_lgort  FOR mara-mtart.
+  RANGES : l_vkorg  FOR mvke-vkorg.
+  RANGES : l_vtweg  FOR mvke-vtweg.
+
+
+  IF p_lgort IS NOT INITIAL.
+    l_lgort-sign   = 'I'.
+    l_lgort-option = 'EQ'.
+    l_lgort-low    = p_lgort.
+    APPEND l_lgort.
+  ENDIF.
+
+  IF p_vkorg IS NOT INITIAL.
+    l_vkorg-sign   = 'I'.
+    l_vkorg-option = 'EQ'.
+    l_vkorg-low    = p_vkorg.
+    APPEND l_vkorg.
+  ENDIF.
+  IF p_vtweg IS NOT INITIAL.
+    l_vtweg-sign   = 'I'.
+    l_vtweg-option = 'EQ'.
+    l_vtweg-low    = p_vtweg.
+    APPEND l_vkorg.
+  ENDIF.
+  SELECT * FROM mara AS a
+         INNER JOIN marc AS b ON a~matnr = b~matnr
+         INTO CORRESPONDING FIELDS OF TABLE t_indata
+        WHERE   a~matnr IN s_mat
+        AND     a~ersda IN s_dat
+        AND     b~werks  = p_plant.
+  LOOP AT t_indata.
+
+    SELECT SINGLE * FROM mvke
+                    INTO mvke
+                   WHERE matnr = t_indata-matnr
+                   AND   vkorg IN l_vkorg
+                   AND   vtweg IN l_vtweg.
+    IF sy-subrc = 0.
+      MOVE-CORRESPONDING mvke TO t_indata.
+*      t_indata-eikto = knvv-eikto.
+    ELSEIF  sy-subrc NE 0
+        AND l_vkorg[] IS NOT INITIAL
+        OR  l_vtweg[] IS NOT INITIAL
+        OR  l_lgort[] IS NOT INITIAL.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    SELECT SINGLE * FROM makt
+                    INTO CORRESPONDING FIELDS OF t_indata
+                    WHERE matnr = t_indata-matnr
+                    AND   spras = 'E'.
+    SELECT SINGLE * FROM mlan
+                    INTO CORRESPONDING FIELDS OF t_indata
+                    WHERE matnr = t_indata-matnr.
+    SELECT SINGLE * FROM mbew
+                    INTO CORRESPONDING FIELDS OF t_indata
+                    WHERE matnr = t_indata-matnr.
+
+    SELECT SINGLE * FROM mard
+             INTO CORRESPONDING FIELDS OF t_indata
+             WHERE matnr = t_indata-matnr
+             AND  lgort IN l_lgort.
+    IF sy-subrc NE 0 AND l_lgort[] IS NOT INITIAL.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    MODIFY t_indata .
+    MOVE-CORRESPONDING t_indata TO t_outdat.
+    APPEND t_outdat.
+  ENDLOOP.
+
+ENDFORM.                    " FETCH_DATA
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*        Download fuction
+*----------------------------------------------------------------------*
+
+FORM download_data .
+  DATA : f_string TYPE string.
+  f_string = p_down.
+
+  INSERT w_initial INTO t_outdat INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_outdat[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+    v_flag = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*&      Form  MASTER_CLEAR
+*&---------------------------------------------------------------------*
+*       Master Clear Before Creating Bapi
+*----------------------------------------------------------------------*
+
+FORM master_clear .
+  CLEAR: headdata,
+         clientdata,
+         clientdatax,
+         plantdata,
+         plantdatax,
+         return,
+         salesdata,
+         salesdatax,
+         valuationdata,
+         valuationdatax,
+         storageloc,
+         storagelocx,
+         uom,
+         uomx,
+         desc,
+         tax,
+         return,
+         ret.
+
+  REFRESH :uom,
+          uomx,
+          desc,
+          tax,
+          ret.
+ENDFORM.                    " MASTER_CLEAR
+*&---------------------------------------------------------------------*
+*&      Form  ORIGINAL_FORMAT
+*&---------------------------------------------------------------------*
+*       Taking Back the fields to the original format
+*----------------------------------------------------------------------*
+
+FORM original_format .
+  LOOP AT t_err.
+*Conversion routine for Material
+    IF NOT t_err-matnr IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_MATN1_OUTPUT'
+        EXPORTING
+          input  = t_err-matnr
+        IMPORTING
+          output = t_err-matnr.
+      MODIFY t_err.
+    ENDIF.
+* Validating The Volume Unit
+    IF NOT t_err-voleh IS INITIAL.
+
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+        EXPORTING
+          input                = t_err-voleh
+*    LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_err-voleh
+*  EXCEPTIONS
+*    UNIT_NOT_FOUND       = 1
+*    OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_err.
+    ENDIF.
+
+*Validating The Weight Unit
+    IF NOT t_err-gewei IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+      EXPORTING
+        input                = t_err-gewei
+*    LANGUAGE             = SY-LANGU
+     IMPORTING
+       output               = t_err-gewei
+*  EXCEPTIONS
+*    UNIT_NOT_FOUND       = 1
+*    OTHERS               = 2
+              .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_err.
+    ENDIF.
+    IF NOT t_err-meins IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+          EXPORTING
+            input                = t_err-meins
+*       LANGUAGE             = SY-LANGU
+         IMPORTING
+           output               = t_err-meins
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                  .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_err.
+    ENDIF.
+    IF NOT t_err-spras IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_ISOLA_OUTPUT'
+        EXPORTING
+          input  = t_err-spras
+        IMPORTING
+          output = t_err-spras.
+      MODIFY t_err.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " ORIGINAL_FORMAT
+*&---------------------------------------------------------------------*
+*&      Form  DATA_ORIGINAL
+*&---------------------------------------------------------------------*
+*       Transferrig The Data Back To The Original Format
+*----------------------------------------------------------------------*
+
+FORM data_original .
+  LOOP AT t_outdat.
+*Conversion routine for Material
+    IF NOT t_outdat-matnr IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_MATN1_OUTPUT'
+        EXPORTING
+          input  = t_outdat-matnr
+        IMPORTING
+          output = t_outdat-matnr.
+      MODIFY t_outdat.
+    ENDIF.
+* Validating The Volume Unit
+    IF NOT t_outdat-voleh IS INITIAL.
+
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+        EXPORTING
+          input                = t_outdat-voleh
+*    LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_outdat-voleh
+*  EXCEPTIONS
+*    UNIT_NOT_FOUND       = 1
+*    OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_outdat.
+    ENDIF.
+
+*Validating The Weight Unit
+    IF NOT t_outdat-gewei IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+      EXPORTING
+        input                = t_outdat-gewei
+*    LANGUAGE             = SY-LANGU
+     IMPORTING
+       output               = t_outdat-gewei
+*  EXCEPTIONS
+*    UNIT_NOT_FOUND       = 1
+*    OTHERS               = 2
+              .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_outdat.
+    ENDIF.
+    IF NOT t_outdat-meins IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+          EXPORTING
+            input                = t_outdat-meins
+*       LANGUAGE             = SY-LANGU
+         IMPORTING
+           output               = t_outdat-meins
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                  .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      MODIFY t_outdat.
+    ENDIF.
+    IF NOT t_outdat-spras IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_ISOLA_OUTPUT'
+        EXPORTING
+          input  = t_outdat-spras
+        IMPORTING
+          output = t_outdat-spras.
+      MODIFY t_outdat.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " DATA_ORIGINAL

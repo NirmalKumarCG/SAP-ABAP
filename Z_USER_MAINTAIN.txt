@@ -1,0 +1,966 @@
+REPORT z_copy_user
+       NO STANDARD PAGE HEADING LINE-SIZE 255.
+
+INCLUDE bdcrecx1.
+
+*Type-pools
+TYPE-POOLS : truxs.
+DATA: it_raw TYPE truxs_t_text_data.
+
+TYPES: BEGIN OF ty_data,
+        uname1(40),
+        uname2(40),
+        l_name(40),
+        function(40),
+        dept(40),
+        email(40),
+        f_name(40),
+        search(40),
+        tel_no(40),
+        mob_no(40),
+        fax_no(40),
+        comments(1024),
+       END OF ty_data.
+
+DATA : BEGIN OF t_data1 OCCURS 0,
+        uname(12),
+        title(10),
+        l_name(40),
+        email(40),
+        i_psswd(40),
+        r_psswd(40),
+        user_type(20),
+        log_lang(20),
+        dec_not(20),
+        date_fm(20),
+        out_dev(20),
+        tim_zone(20),
+        par_set(10),
+        function(40),
+        dept(40),
+        f_name(40),
+        search(40),
+        tel_no(40),
+        mob_no(40),
+        fax_no(40),
+        comments(1024),
+       END OF t_data1.
+
+DATA : BEGIN OF t_par OCCURS 0,
+        p_id(20),
+        p_val(18),
+        p_txt(60),
+        p_key(10),
+       END OF t_par.
+
+DATA t_data TYPE STANDARD TABLE OF ty_data.
+DATA w_data  LIKE LINE OF t_data.
+DATA t_succ TYPE STANDARD TABLE OF ty_data.
+DATA t_err  TYPE STANDARD TABLE OF ty_data.
+DATA t_err1 LIKE t_data1 OCCURS 0 WITH HEADER LINE.
+DATA t_succ1 LIKE t_data1 OCCURS 0 WITH HEADER LINE.
+DATA : g_succ(5) TYPE n VALUE 0,
+       g_fail(5) TYPE n VALUE 0,
+       g_tot(7)     TYPE n.
+*DATA:   MESSTAB LIKE BDCMSGCOLL OCCURS 0 WITH HEADER LINE.
+
+SELECTION-SCREEN BEGIN OF BLOCK b001 WITH FRAME TITLE text-001.
+PARAMETERS:  p_file   LIKE rlgrap-filename DEFAULT 'C:\' OBLIGATORY,
+             p_par    LIKE rlgrap-filename DEFAULT 'C:\' MODIF ID b,
+             p_err    LIKE rlgrap-filename DEFAULT 'C:\TEMP\ERROR.XLS' OBLIGATORY,
+             p_head   AS CHECKBOX DEFAULT 'X',
+             p_r4     RADIOBUTTON GROUP rad USER-COMMAND clk DEFAULT 'X',
+             p_r1     RADIOBUTTON GROUP rad.
+PARAMETERS   p_r3     RADIOBUTTON GROUP rad.
+PARAMETERS:  p_r2     RADIOBUTTON GROUP rad,
+             p_lname  AS CHECKBOX MODIF ID a,
+             p_func   AS CHECKBOX MODIF ID a,
+             p_dept   AS CHECKBOX MODIF ID a,
+             p_email  AS CHECKBOX MODIF ID a,
+             p_fname  AS CHECKBOX MODIF ID a,
+             p_sch    AS CHECKBOX MODIF ID a,
+             p_telno  AS CHECKBOX MODIF ID a,
+             p_mobno  AS CHECKBOX MODIF ID a,
+             p_faxno  AS CHECKBOX MODIF ID a.
+SELECTION-SCREEN END OF BLOCK b001.
+*----------------------------------------------------------------------*
+*  AT SELECTION-SCREEN OUTPUT                                                    *
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+*Inactive Fields depending on the radio button
+  LOOP AT SCREEN.
+    IF p_r2 = 'X'.
+      IF screen-group1 = 'A'.
+        screen-active = 1.
+      ENDIF.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r4 = 'X'.
+      IF screen-group1 = 'B'.
+        screen-active = 1.
+      ENDIF.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+    ELSE.
+      IF screen-group1 = 'A'.
+        screen-active = 0.
+      ENDIF.
+      IF screen-group1 = 'B'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*AT SELECTION-SCREEN.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  PERFORM 100_get_file USING p_file.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_err.
+  PERFORM 100_get_file USING p_err.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_par.
+  PERFORM 100_get_file USING p_par.
+
+START-OF-SELECTION.
+  IF p_r4 IS INITIAL.
+    PERFORM 200_upload_file.
+  ENDIF.
+  IF p_r1 = 'X'.
+    PERFORM 300_copy_user_bdc.
+  ELSEIF p_r2 = 'X'.
+    PERFORM 310_edit_user_det.
+  ELSEIF p_r3 = 'X'.
+    PERFORM 320_delete_user.
+  ELSEIF p_r4 = 'X'.
+    PERFORM 330_create_user.
+  ENDIF.
+  IF p_r4 IS INITIAL.
+    PERFORM 400_download.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  200_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Upload file
+*----------------------------------------------------------------------*
+FORM 200_upload_file .
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+       i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_file
+     TABLES
+       i_tab_converted_data       = t_data
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " 200_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  300_COPY_USER_BDC
+*&---------------------------------------------------------------------*
+*       BDC part for copying user and assigning changes
+*----------------------------------------------------------------------*
+FORM 300_copy_user_bdc .
+  DATA l_bname TYPE usr01-bname.
+  PERFORM open_group.
+
+  LOOP AT t_data INTO w_data.
+    CONDENSE w_data-uname1 .
+    CONDENSE w_data-uname2 .
+    CONDENSE w_data-function.
+    CONDENSE w_data-dept.
+    CONDENSE w_data-l_name.
+    CONDENSE w_data-email.
+    CONDENSE w_data-f_name.
+    CONDENSE w_data-search.
+    CONDENSE w_data-tel_no.
+    CONDENSE w_data-mob_no.
+    CONDENSE w_data-fax_no.
+    SELECT SINGLE bname FROM usr01
+                        INTO l_bname
+                       WHERE bname = w_data-uname1.
+    IF sy-subrc <> 0 .
+      w_data-comments = 'User from which data is to copied does not exists'.
+      APPEND w_data TO t_succ.
+*      DELETE t_data FROM w_data.
+      CONTINUE.
+    ENDIF.
+    IF w_data-uname1 IS INITIAL.
+      w_data-comments = 'Copy from User should not be blank'.
+      APPEND w_data TO t_succ.
+*      DELETE t_data FROM w_data.
+      CONTINUE.
+    ENDIF.
+    IF w_data-uname1 IS INITIAL.
+      w_data-comments = 'Copy to User should not be blank'.
+      APPEND w_data TO t_succ.
+*      DELETE t_data FROM w_data.
+      CONTINUE.
+    ENDIF.
+    PERFORM bdc_dynpro      USING 'SAPLSUU5'   '0050'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'        'USR02-BNAME'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'        '=COPY'.
+    PERFORM bdc_field       USING 'USR02-BNAME'       w_data-uname1.
+
+    PERFORM bdc_dynpro      USING 'SAPLSUU5'  '0200'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'        'USR02-BNAME'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'        '=COPY'.
+    PERFORM bdc_field       USING 'USR01-BNAME'       w_data-uname1.
+    PERFORM bdc_field       USING 'USR02-BNAME'       w_data-uname2.
+    PERFORM bdc_field       USING 'CHECK_DEFAULTS'    'X'.
+    PERFORM bdc_field       USING 'CHECK_PARAMETERS'  'X'.
+    PERFORM bdc_field       USING 'CHECK_REFUSER'     'X'.
+    PERFORM bdc_field       USING 'CHECK_ACTGRP'      'X'.
+    PERFORM bdc_field       USING 'CHECK_PROFILES'    'X'.
+    PERFORM bdc_field       USING 'CHECK_USERGROUPS'  'X'.
+    PERFORM bdc_field       USING 'CHECK_PERS'        'X'.
+    PERFORM bdc_field       USING 'CHECK_LAW'         'X'.
+    PERFORM bdc_field       USING 'CHECK_EASY_ACCESS' 'X'.
+
+    PERFORM bdc_dynpro      USING 'SAPLSUU5'  '0100'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'        '=ADDR'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'        'G_PASSWORD2'.
+    PERFORM bdc_field       USING 'USLOGOND-USTYP'    'A'.
+    PERFORM bdc_field       USING 'G_PASSWORD1'       'welcome'.
+    PERFORM bdc_field       USING 'G_PASSWORD2'       'welcome'.
+
+    PERFORM bdc_dynpro      USING 'SAPLSUU5' '0100'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'              '=UPD'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'              'SZA5_D0700-SMTP_ADDR'.
+    IF w_data-l_name IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-NAME_LAST'    w_data-l_name.
+    ELSE.
+      PERFORM bdc_field       USING 'ADDR3_DATA-NAME_LAST'    w_data-uname2.
+    ENDIF.
+    IF w_data-f_name IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-NAME_FIRST'   w_data-f_name.
+    ENDIF.
+    IF w_data-function IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-FUNCTION'     w_data-function.
+    ENDIF.
+    IF w_data-dept IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-DEPARTMENT'   w_data-dept.
+    ENDIF.
+    IF w_data-search IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-SORT1_P'      w_data-search.
+    ENDIF.
+    IF w_data-tel_no IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-TEL_NUMBER'   w_data-tel_no.
+    ENDIF.
+    IF w_data-mob_no IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-MOB_NUMBER'   w_data-mob_no.
+    ENDIF.
+    IF w_data-fax_no IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-FAX_NUMBER'   w_data-fax_no.
+    ENDIF.
+    IF w_data-email IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-SMTP_ADDR'    w_data-email.
+    ENDIF.
+    PERFORM bdc_transaction USING 'SU01'.
+*-----Error handling.
+    READ TABLE messtab WITH KEY msgtyp = 'E'.
+    IF sy-subrc = 0.
+      PERFORM mess_description.
+      APPEND w_data TO t_err .
+      g_fail = g_fail + 1.
+    ELSE.
+      READ TABLE messtab WITH KEY msgtyp = 'S'.
+      IF sy-subrc = 0.
+        IF ( NOT messtab-msgv1 IS INITIAL AND
+           NOT messtab-msgv2 IS INITIAL AND
+           NOT messtab-msgv3 IS INITIAL ).
+          CONCATENATE messtab-msgv3
+                      ' '
+                      messtab-msgv1
+                      ' '
+                      messtab-msgv2
+                      ' '
+                      'is created'
+                      INTO w_data-comments.
+        ELSE.
+          PERFORM mess_description.
+        ENDIF.
+        APPEND w_data TO t_succ.
+        g_succ = g_succ + 1.
+      ENDIF.
+    ENDIF.
+    CLEAR : messtab,
+            w_data.
+    REFRESH messtab[].
+  ENDLOOP.
+  PERFORM close_group.
+ENDFORM.                    " 300_COPY_USER_BDC
+*&---------------------------------------------------------------------*
+*&      Form  MESS_DESCRIPTION
+*&---------------------------------------------------------------------*
+*       Populate message description
+*----------------------------------------------------------------------*
+FORM mess_description .
+  CALL FUNCTION 'FORMAT_MESSAGE'
+    EXPORTING
+      id   = messtab-msgid
+      lang = sy-langu
+      no   = messtab-msgnr
+    IMPORTING
+      msg  = w_data-comments.
+ENDFORM.                    " MESS_DESCRIPTION
+*&---------------------------------------------------------------------*
+*&      Form  400_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Download success and error data
+*----------------------------------------------------------------------*
+FORM 400_download .
+
+  IF NOT t_succ[] IS INITIAL.
+*-----Header.
+    w_data-uname1       = 'Copied from User'.
+    w_data-uname2       = 'Created User'.
+    w_data-function     = 'Function'.
+    w_data-dept         = 'Department'.
+    w_data-l_name       = 'Last Name'.
+    w_data-email        = 'Email'.
+    w_data-f_name       = 'First Name'.
+    w_data-search       = 'Search'.
+    w_data-tel_no       = 'Telephone No'.
+    w_data-mob_no       = 'Mobile No'.
+    w_data-fax_no       = 'Fax No'.
+    w_data-comments     = 'Comments'.
+
+    INSERT w_data INTO t_succ INDEX 1.
+    CLEAR w_data.
+
+*-----Control Information.
+    INSERT w_data INTO t_succ INDEX 2.
+    CONCATENATE 'No of Erros Records :'
+                g_fail
+                INTO w_data-uname1 .
+    INSERT w_data INTO t_succ INDEX 3.
+    CLEAR  w_data.
+    CONCATENATE 'No of Success Records :'
+                g_succ
+                INTO w_data-uname1 .
+    INSERT w_data INTO t_succ INDEX 4.
+    CLEAR  w_data.
+    g_tot = g_succ + g_fail.
+    CONCATENATE 'Total No of Records :'
+                 g_tot
+                INTO w_data-uname1 .
+    INSERT w_data INTO t_succ INDEX 5.
+    CLEAR w_data.
+
+*-----General Information.
+    w_data-uname1       = 'User-ID:'.
+    w_data-uname2       = sy-uname.
+    w_data-function     = 'User Creation'.
+
+    INSERT w_data INTO t_succ INDEX 6.
+    CLEAR w_data.
+    INSERT w_data INTO t_succ INDEX 7.
+
+    LOOP AT t_err INTO w_data.
+      APPEND w_data TO t_succ.
+    ENDLOOP.
+    DATA l_filename TYPE string.
+    l_filename = p_err.
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+*         BIN_FILESIZE                    =
+        filename                        = l_filename
+       filetype                        = 'ASC'
+*         APPEND                          = ' '
+       write_field_separator           = 'X'
+*         HEADER                          = '00'
+*         TRUNC_TRAILING_BLANKS           = ' '
+*         WRITE_LF                        = 'X'
+*         COL_SELECT                      = ' '
+*         COL_SELECT_MASK                 = ' '
+*         DAT_MODE                        = ' '
+*         CONFIRM_OVERWRITE               = ' '
+*         NO_AUTH_CHECK                   = ' '
+*         CODEPAGE                        = ' '
+*         IGNORE_CERR                     = ABAP_TRUE
+*         REPLACEMENT                     = '#'
+*         WRITE_BOM                       = ' '
+*         TRUNC_TRAILING_BLANKS_EOL       = 'X'
+*         WK1_N_FORMAT                    = ' '
+*         WK1_N_SIZE                      = ' '
+*         WK1_T_FORMAT                    = ' '
+*         WK1_T_SIZE                      = ' '
+*         WRITE_LF_AFTER_LAST_LINE        = ABAP_TRUE
+*         SHOW_TRANSFER_STATUS            = ABAP_TRUE
+*       IMPORTING
+*         FILELENGTH                      =
+      TABLES
+        data_tab                        = t_succ[]
+*         FIELDNAMES                      =
+     EXCEPTIONS
+       file_write_error                = 1
+       no_batch                        = 2
+       gui_refuse_filetransfer         = 3
+       invalid_type                    = 4
+       no_authority                    = 5
+       unknown_error                   = 6
+       header_not_allowed              = 7
+       separator_not_allowed           = 8
+       filesize_not_allowed            = 9
+       header_too_long                 = 10
+       dp_error_create                 = 11
+       dp_error_send                   = 12
+       dp_error_write                  = 13
+       unknown_dp_error                = 14
+       access_denied                   = 15
+       dp_out_of_memory                = 16
+       disk_full                       = 17
+       dp_timeout                      = 18
+       file_not_found                  = 19
+       dataprovider_exception          = 20
+       control_flush_error             = 21
+       OTHERS                          = 22
+              .
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " 400_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  310_EDIT_USER_DET
+*&---------------------------------------------------------------------*
+*       Edit User details
+*----------------------------------------------------------------------*
+FORM 310_edit_user_det .
+  PERFORM open_group.
+  LOOP AT t_data INTO w_data.
+    CONDENSE w_data-uname1.
+    CONDENSE w_data-uname2.
+    CONDENSE w_data-function.
+    CONDENSE w_data-dept.
+    CONDENSE w_data-l_name.
+    CONDENSE w_data-email.
+    CONDENSE w_data-f_name.
+    CONDENSE w_data-search.
+    CONDENSE w_data-tel_no.
+    CONDENSE w_data-mob_no.
+    CONDENSE w_data-fax_no.
+    IF w_data-uname1 IS INITIAL.
+      w_data-comments = 'User should not be blank'.
+      APPEND w_data TO t_succ.
+*      DELETE t_data FROM w_data.
+      CONTINUE.
+    ENDIF.
+    PERFORM bdc_dynpro      USING 'SAPLSUU5' '0050'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'  'USR02-BNAME'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'  '=CHAN'.
+    PERFORM bdc_field       USING 'USR02-BNAME' w_data-uname1.
+
+    PERFORM bdc_dynpro      USING 'SAPLSUU5' '0100'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'            '=UPD'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'            'ADDR3_DATA-LANGU_P'.
+    IF p_lname IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-NAME_LAST'  w_data-l_name.
+    ENDIF.
+    IF p_fname IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-NAME_FIRST' w_data-f_name.
+    ENDIF.
+    IF p_func IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-FUNCTION'   w_data-function.
+    ENDIF.
+    IF p_dept IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-DEPARTMENT' w_data-dept.
+    ENDIF.
+    IF p_sch IS NOT INITIAL.
+      PERFORM bdc_field       USING 'ADDR3_DATA-SORT1_P'    w_data-search.
+    ENDIF.
+    IF p_telno IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-TEL_NUMBER' w_data-tel_no.
+    ENDIF.
+    IF p_mobno IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-MOB_NUMBER' w_data-mob_no.
+    ENDIF.
+    IF p_faxno IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-FAX_NUMBER' w_data-fax_no.
+    ENDIF.
+    IF p_email IS NOT INITIAL.
+      PERFORM bdc_field       USING 'SZA5_D0700-SMTP_ADDR'  w_data-email.
+    ENDIF.
+    PERFORM bdc_transaction USING 'SU01'.
+*-----Error handling.
+    READ TABLE messtab WITH KEY msgtyp = 'E'.
+    IF sy-subrc = 0.
+      PERFORM mess_description.
+      APPEND w_data TO t_err .
+      g_fail = g_fail + 1.
+    ELSE.
+      READ TABLE messtab WITH KEY msgtyp = 'S'.
+      IF sy-subrc = 0.
+        IF ( NOT messtab-msgv1 IS INITIAL AND
+           NOT messtab-msgv2 IS INITIAL AND
+           NOT messtab-msgv3 IS INITIAL ).
+          CONCATENATE messtab-msgv3
+                      ' '
+                      messtab-msgv1
+                      ' '
+                      messtab-msgv2
+                      ' '
+                      'is created'
+                      INTO w_data-comments.
+        ELSE.
+          PERFORM mess_description.
+        ENDIF.
+        APPEND w_data TO t_succ.
+        g_succ = g_succ + 1.
+      ENDIF.
+    ENDIF.
+    CLEAR : messtab,
+            w_data.
+    REFRESH messtab[].
+  ENDLOOP.
+  PERFORM close_group.
+ENDFORM.                    " 310_EDIT_USER_DET
+*&---------------------------------------------------------------------*
+*&      Form  320_DELETE_USER
+*&---------------------------------------------------------------------*
+*       Delete User
+*----------------------------------------------------------------------*
+FORM 320_delete_user .
+  PERFORM open_group.
+  LOOP AT t_data INTO w_data.
+    CONDENSE w_data-uname1.
+    IF w_data-uname1 IS INITIAL.
+      w_data-comments = 'User should not be blank'.
+      APPEND w_data TO t_succ.
+*      DELETE t_data FROM w_data.
+      CONTINUE.
+    ENDIF.
+    PERFORM bdc_dynpro      USING 'SAPLSUU5' '0050'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'    'USR02-BNAME'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'    '=DELE'.
+    PERFORM bdc_field       USING 'USR02-BNAME'   w_data-uname1.
+
+    PERFORM bdc_dynpro      USING 'SAPLSPO1' '0300'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'  '=YES'.
+    PERFORM bdc_transaction USING 'SU01'.
+*-----Error handling.
+    READ TABLE messtab WITH KEY msgtyp = 'E'.
+    IF sy-subrc = 0.
+      PERFORM mess_description.
+      APPEND w_data TO t_err .
+      g_fail = g_fail + 1.
+    ELSE.
+      READ TABLE messtab WITH KEY msgtyp = 'S'.
+      IF sy-subrc = 0.
+        IF ( NOT messtab-msgv1 IS INITIAL AND
+           NOT messtab-msgv2 IS INITIAL AND
+           NOT messtab-msgv3 IS INITIAL ).
+          CONCATENATE messtab-msgv3
+                      ' '
+                      messtab-msgv1
+                      ' '
+                      messtab-msgv2
+                      ' '
+                      'is created'
+                      INTO w_data-comments.
+        ELSE.
+          PERFORM mess_description.
+        ENDIF.
+        APPEND w_data TO t_succ.
+        g_succ = g_succ + 1.
+      ENDIF.
+    ENDIF.
+    CLEAR : messtab,
+            w_data.
+    REFRESH messtab[].
+  ENDLOOP.
+  PERFORM close_group.
+ENDFORM.                    " 320_DELETE_USER
+*&---------------------------------------------------------------------*
+*&      Form  100_GET_FILE
+*&---------------------------------------------------------------------*
+*       Get File
+*----------------------------------------------------------------------*
+FORM 100_get_file  USING    p_filename.
+  CALL FUNCTION 'F4_FILENAME'
+* EXPORTING
+*   PROGRAM_NAME        = SYST-CPROG
+*   DYNPRO_NUMBER       = SYST-DYNNR
+*   FIELD_NAME          = ' '
+ IMPORTING
+   file_name           = p_filename
+            .
+ENDFORM.                    " 100_GET_FILE
+*&---------------------------------------------------------------------*
+*&      Form  330_CREATE_USER
+*&---------------------------------------------------------------------*
+*       Create User
+*----------------------------------------------------------------------*
+FORM 330_create_user .
+  PERFORM upload_file.
+  PERFORM check_data.
+  PERFORM create_user.
+  PERFORM download_data.
+ENDFORM.                    " 330_CREATE_USER
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Upload File
+*----------------------------------------------------------------------*
+FORM upload_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+       i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_file
+     TABLES
+       i_tab_converted_data       = t_data1
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+       i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_par
+     TABLES
+       i_tab_converted_data       = t_par
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+ENDFORM.                    " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_DATA
+*&---------------------------------------------------------------------*
+*       Validate data
+*----------------------------------------------------------------------*
+FORM check_data .
+  DATA l_name(20).
+  LOOP AT t_data1.
+    CONDENSE t_data1-uname.
+    CONDENSE t_data1-title.
+    CONDENSE t_data1-l_name.
+    CONDENSE t_data1-email.
+    CONDENSE t_data1-i_psswd.
+    CONDENSE t_data1-r_psswd.
+    CONDENSE t_data1-user_type.
+    CONDENSE t_data1-log_lang.
+    CONDENSE t_data1-dec_not.
+    CONDENSE t_data1-date_fm.
+    CONDENSE t_data1-out_dev.
+    CONDENSE t_data1-tim_zone.
+    CONDENSE t_data1-par_set.
+    CONDENSE t_data1-function.
+    CONDENSE t_data1-dept.
+    CONDENSE t_data1-f_name.
+    CONDENSE t_data1-search.
+    CONDENSE t_data1-tel_no.
+    CONDENSE t_data1-mob_no.
+    CONDENSE t_data1-fax_no.
+    MODIFY t_data1.
+    SELECT SINGLE bname FROM usr01
+                        INTO l_name
+                       WHERE bname = t_data1-uname.
+    IF sy-subrc = 0.
+      MOVE-CORRESPONDING t_data1 TO t_err1.
+      t_err1-comments = 'User Already Exist'.
+      APPEND t_err1.
+      DELETE t_data1.
+      CONTINUE.
+    ENDIF.
+    IF t_data1-r_psswd <> t_data1-i_psswd.
+      MOVE-CORRESPONDING t_data1 TO t_err1.
+      t_err1-comments = 'Initial Password and Repeat Password is different'.
+      APPEND t_err1.
+      DELETE t_data1.
+      CONTINUE.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " CHECK_DATA
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_USER
+*&---------------------------------------------------------------------*
+*       Create User
+*----------------------------------------------------------------------*
+FORM create_user .
+  DATA : w_logondata LIKE bapilogond,
+         w_password LIKE bapipwd,
+         w_defaults LIKE bapidefaul,
+         w_address LIKE bapiaddr3,
+         t_parameter LIKE bapiparam OCCURS 0 WITH HEADER LINE,
+         t_return LIKE bapiret2 OCCURS 0 WITH HEADER LINE.
+  LOOP AT t_data1.
+    CLEAR: w_logondata,
+           w_password,
+           w_defaults,
+           w_address,
+           t_parameter,
+           t_parameter[],
+           t_return,
+           t_return[] .
+*--Pass Logon Data
+    w_logondata-ustyp      = t_data1-user_type.
+*    w_logondata-tzone      = t_data1-tim_zone.
+*--Pass Password
+    w_password-bapipwd     = t_data1-i_psswd.
+*--Pass Defaults
+    w_defaults-spld        = t_data1-out_dev.
+    w_defaults-datfm       = t_data1-date_fm.
+    w_defaults-dcpfm       = t_data1-dec_not.
+    w_defaults-langu       = t_data1-log_lang.
+*--Pass Address data
+    w_address-title_p      = t_data1-title.
+    w_address-firstname    = t_data1-f_name.
+    w_address-lastname     = t_data1-l_name.
+    w_address-sort1_p      = t_data1-search.
+    w_address-department   = t_data1-dept.
+    w_address-function     = t_data1-function.
+    w_address-tel1_numbr   = t_data1-tel_no.
+    w_address-fax_number   = t_data1-fax_no.
+    w_address-e_mail       = t_data1-email.
+    LOOP AT t_par WHERE p_key = t_data1-par_set.
+*--Pass Parameter values
+      t_parameter-parid   = t_par-p_id.
+      t_parameter-parva   = t_par-p_val.
+      t_parameter-partxt  = t_par-p_txt.
+      APPEND t_parameter.
+    ENDLOOP.
+    CALL FUNCTION 'BAPI_USER_CREATE'
+      EXPORTING
+        username                      = t_data1-uname
+        logondata                     = w_logondata
+        password                      = w_password
+        defaults                      = w_defaults
+        address                       = w_address
+*       COMPANY                       =
+*       SNC                           =
+*       REF_USER                      =
+*       ALIAS                         =
+*       EX_ADDRESS                    =
+*       UCLASS                        =
+*       FORCE_SYSTEM_ASSIGNMENT       =
+*       SELF_REGISTER                 = ' '
+      TABLES
+        parameter                     = t_parameter
+        return                        = t_return
+*       ADDTEL                        =
+*       ADDFAX                        =
+*       ADDTTX                        =
+*       ADDTLX                        =
+*       ADDSMTP                       =
+*       ADDRML                        =
+*       ADDX400                       =
+*       ADDRFC                        =
+*       ADDPRT                        =
+*       ADDSSF                        =
+*       ADDURI                        =
+*       ADDPAG                        =
+*       ADDCOMREM                     =
+*       GROUPS                        =
+*       PARAMETER1                    =
+*       EXTIDHEAD                     =
+*       EXTIDPART                     =
+              .
+    READ TABLE t_return WITH KEY type = 'E'.
+    IF sy-subrc NE 0.
+      COMMIT WORK.
+*        WAIT up to 1 seconds.
+      PERFORM update_mobileno.
+      MOVE-CORRESPONDING t_data1 TO t_succ1.
+      LOOP AT t_return WHERE type = 'S'.
+        CONCATENATE t_succ1-comments '/' t_return-message
+                    INTO t_succ1-comments SEPARATED BY space.
+      ENDLOOP.
+      APPEND t_succ1.
+    ELSE.
+      MOVE-CORRESPONDING t_data1 TO t_err1.
+      LOOP AT t_return WHERE type NE 'S'.
+        CONCATENATE t_err1-comments '/' t_return-message
+                    INTO t_err1-comments SEPARATED BY space.
+      ENDLOOP.
+      APPEND t_err1.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " CREATE_USER
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*       Download Data
+*----------------------------------------------------------------------*
+FORM download_data .
+  IF NOT t_err1[] IS INITIAL OR t_succ1[] IS NOT INITIAL.
+*-----Header.
+    t_err1-uname        = 'User'.
+    t_err1-title        = 'Title'.
+    t_err1-l_name       = 'Last Name'.
+    t_err1-email        = 'E-Mail'.
+    t_err1-i_psswd      = 'Initial Password'.
+    t_err1-r_psswd      = 'Repeat Password'.
+    t_err1-user_type    = 'User Type'.
+    t_err1-log_lang     = 'Language'.
+    t_err1-dec_not      = 'Decimal Notation'.
+    t_err1-date_fm      = 'Date Format'.
+    t_err1-out_dev      = 'Output Device'.
+    t_err1-tim_zone     = 'Time Zone'.
+    t_err1-par_set      = 'Parameter Settings'.
+    t_err1-function     = 'Function'.
+    t_err1-dept         = 'Department'.
+    t_err1-f_name       = 'First Nmae'.
+    t_err1-search       = 'Search Term'.
+    t_err1-tel_no       = 'Telephone No'.
+    t_err1-mob_no       = 'Mobile No'.
+    t_err1-fax_no       = 'Fax No'.
+    t_err1-comments     = 'Comments'.
+
+    INSERT t_err1 INDEX 1.
+    CLEAR t_err1.
+*-----Control Information.
+    INSERT t_err1 INDEX 2.
+*    CONCATENATE 'No of Erros Records :'
+*                g_fail
+*                INTO w_data-uname1 .
+*    INSERT w_data INTO t_succ INDEX 3.
+*    CLEAR  w_data.
+*    CONCATENATE 'No of Success Records :'
+*                g_succ
+*                INTO w_data-uname1 .
+*    INSERT w_data INTO t_succ INDEX 4.
+*    CLEAR  w_data.
+*    g_tot = g_succ + g_fail.
+*    CONCATENATE 'Total No of Records :'
+*                 g_tot
+*                INTO w_data-uname1 .
+*    INSERT w_data INTO t_succ INDEX 5.
+*    CLEAR w_data.
+    CLEAR t_err1.
+    APPEND t_err1.
+    CLEAR t_err1.
+    APPEND t_err1.
+    IF t_succ1[] IS NOT INITIAL.
+      t_err1-uname = 'Succ.Records'.
+      APPEND t_err1.
+    ENDIF.
+    CLEAR t_err1.
+    APPEND t_err1.
+    LOOP AT t_succ1.
+      MOVE-CORRESPONDING t_succ1 TO t_err1.
+      APPEND t_err1.
+    ENDLOOP.
+    DATA l_filename TYPE string.
+    l_filename = p_err.
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+*         BIN_FILESIZE                    =
+        filename                        = l_filename
+       filetype                        = 'ASC'
+*         APPEND                          = ' '
+       write_field_separator           = 'X'
+*         HEADER                          = '00'
+*         TRUNC_TRAILING_BLANKS           = ' '
+*         WRITE_LF                        = 'X'
+*         COL_SELECT                      = ' '
+*         COL_SELECT_MASK                 = ' '
+*         DAT_MODE                        = ' '
+*         CONFIRM_OVERWRITE               = ' '
+*         NO_AUTH_CHECK                   = ' '
+*         CODEPAGE                        = ' '
+*         IGNORE_CERR                     = ABAP_TRUE
+*         REPLACEMENT                     = '#'
+*         WRITE_BOM                       = ' '
+*         TRUNC_TRAILING_BLANKS_EOL       = 'X'
+*         WK1_N_FORMAT                    = ' '
+*         WK1_N_SIZE                      = ' '
+*         WK1_T_FORMAT                    = ' '
+*         WK1_T_SIZE                      = ' '
+*         WRITE_LF_AFTER_LAST_LINE        = ABAP_TRUE
+*         SHOW_TRANSFER_STATUS            = ABAP_TRUE
+*       IMPORTING
+*         FILELENGTH                      =
+      TABLES
+        data_tab                        = t_err1[]
+*         FIELDNAMES                      =
+     EXCEPTIONS
+       file_write_error                = 1
+       no_batch                        = 2
+       gui_refuse_filetransfer         = 3
+       invalid_type                    = 4
+       no_authority                    = 5
+       unknown_error                   = 6
+       header_not_allowed              = 7
+       separator_not_allowed           = 8
+       filesize_not_allowed            = 9
+       header_too_long                 = 10
+       dp_error_create                 = 11
+       dp_error_send                   = 12
+       dp_error_write                  = 13
+       unknown_dp_error                = 14
+       access_denied                   = 15
+       dp_out_of_memory                = 16
+       disk_full                       = 17
+       dp_timeout                      = 18
+       file_not_found                  = 19
+       dataprovider_exception          = 20
+       control_flush_error             = 21
+       OTHERS                          = 22
+              .
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_DATA
+*&---------------------------------------------------------------------*
+*&      Form  UPDATE_MOBILENO
+*&---------------------------------------------------------------------*
+*       Update Mobile No
+*----------------------------------------------------------------------*
+FORM update_mobileno .
+  DATA l_msg(1024).
+  PERFORM open_group.
+  PERFORM bdc_dynpro      USING 'SAPLSUU5' '0050'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'    'USR02-BNAME'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'    '=CHAN'.
+  PERFORM bdc_field       USING 'USR02-BNAME'   t_data1-uname.
+
+  PERFORM bdc_dynpro      USING 'SAPLSUU5' '0100'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'              '=UPD'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'              'SZA5_D0700-MOB_NUMBER'.
+  PERFORM bdc_field       USING 'SZA5_D0700-MOB_NUMBER'   t_data1-mob_no.
+  PERFORM bdc_transaction USING 'SU01'.
+  READ TABLE messtab WITH KEY msgtyp = 'E'.
+  IF sy-subrc = 0.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id   = messtab-msgid
+        lang = sy-langu
+        no   = messtab-msgnr
+      IMPORTING
+        msg  = l_msg.
+    CONCATENATE t_succ1-comments '/' l_msg
+                INTO t_err1-comments.
+  ENDIF.
+  PERFORM close_group.
+ENDFORM.                    " UPDATE_MOBILENO

@@ -1,0 +1,1420 @@
+************************************************************************
+*        Druckroutinen für Einkaufsbelege                              *
+************************************************************************
+
+*----------------------------------------------------------------------*
+* Datenteil
+*----------------------------------------------------------------------*
+
+INCLUDE FM06PTOP.
+*Global Declarations For Tax Calculations
+DATA : GRAND_TOTAL TYPE EKPO-NETWR.
+DATA : G_TOTAL(20).
+DATA :  V_DISCOUNT   TYPE KOMV-KWERT,
+         v_vat       type KOMV-KWERT,
+         v_ed        TYPE KOMV-KWERT,
+         v_ecess     TYPE KOMV-KWERT,
+         v_secess    TYPE KOMV-KWERT,
+         v_cst       TYPE KOMV-KWERT,
+         v_freight   TYPE KOMV-KWERT,
+         v_packing   TYPE KOMV-KWERT,
+         v_insurance TYPE KOMV-KWERT,
+         v_cvd       type KOMV-KWERT,
+         v_octroi    TYPE KOMV-KWERT,
+         v_entry     TYPE KOMV-KWERT,
+         v_add       TYPE KOMV-KWERT,
+         v_vatcess   TYPE KOMV-KWERT,
+         v_handling  TYPE komv-kwert,
+         v_customs   TYPE komv-kwert,
+         v_addcustom TYPE komv-kwert,
+         v_svbload   TYPE komv-kwert,
+         v_cvdecess  type komv-kwert,
+         v_cvdhcess  TYPE komv-kwert,
+         v_custecess type komv-kwert,
+         v_custscess TYPE komv-kwert,
+         v_assvalue  TYPE komv-kwert,
+         v_handper   type komv-kbetr,
+         v_cvdper    type komv-kbetr,
+         v_cvdeper   type komv-kbetr,
+         v_cvdhper   TYPE komv-kbetr,
+         v_cusper    TYPE komv-kbetr,
+         v_custeper  TYPE komv-kbetr,
+         v_custhper  TYPE komv-kbetr,
+         v_addper    type komv-kbetr,
+         v_svbper    TYPE komv-kbetr.
+
+DATA : V_DISCOUNT1(20),
+       v_vat1(20),
+       v_ed1(20),
+       v_ecess1(20),
+       v_secess1(20),
+       v_cst1(20),
+       v_freight1(20),
+       v_packing1(20),
+       v_insurance1(20),
+       v_cvd1(20),
+       v_octroi1(20),
+       v_entry1(20),
+       v_add1(20),
+       v_vatcess1(20),
+       v_handling1(20),
+       v_customs1(20),
+       v_addcustom1(20),
+       v_svbload1(20),
+       v_assvalue1(20),
+       v_cvdecess1(20),
+       v_cvdhcess1(20),
+       v_custecess1(20),
+       v_custscess1(20),
+       v_handper1(20),
+       v_cvdper1(20),
+       v_cvdeper1(20),
+       v_cvdhper1(20),
+       v_cusper1(20),
+       v_custeper1(20),
+       v_custhper1(20),
+       v_addper1(20),
+       v_svbper1(20).
+
+DATA : V_PRICE(20).
+DATA : v_grandtotal LIKE ekpo-netpr,
+       V_GRANDTOTAL1(20).
+DATA : CNT TYPE i.
+*----------------------------------------------------------------------*
+* Datenbeschaffung
+*----------------------------------------------------------------------*
+*INCLUDE FM06PF01.
+
+*----------------------------------------------------------------------*
+* Formularausgabe
+*----------------------------------------------------------------------*
+*INCLUDE FM06PF02.
+
+*----------------------------------------------------------------------*
+* Sonstige PERFORM-Routinen
+*----------------------------------------------------------------------*
+*INCLUDE FM06PF03.
+
+*----------------------------------------------------------------------*
+* Dienstleistungsabwicklung
+*----------------------------------------------------------------------*
+*INCLUDE FM06PF04.
+
+*----------------------------------------------------------------------*
+* Matrixdruck für Varianten
+*----------------------------------------------------------------------*
+*INCLUDE FM06PFVA.
+
+*----------------------------------------------------------------------*
+* Entries
+*----------------------------------------------------------------------*
+*INCLUDE FM06PE01.
+
+*INCLUDE FM06PF05.
+
+*INCLUDE FM06PF06.
+
+*INCLUDE FM06PF07.
+
+*INCLUDE FM06PF08.
+
+*INCLUDE FM06PF09.
+
+INCLUDE FM06PE02.
+
+INCLUDE FM06PE03.
+
+INCLUDE FM06PE04.
+
+*&---------------------------------------------------------------------*
+* TABLES
+*&---------------------------------------------------------------------*
+TABLES: sadr,
+        t005t,
+        t052u,
+        t024,
+        eket,
+        ekpo,
+        a363,
+        lfa1.
+
+TABLES : ekko  , t001 , komk , komp .
+*Structure Declarations For Taxes
+DATA : taxcom TYPE taxcom  .
+*Constants Declaration
+CONSTANTS: bstyp-info VALUE 'I',
+          bstyp-ordr VALUE 'W',
+          bstyp-banf VALUE 'B',
+          bstyp-best VALUE 'F',
+          bstyp-anfr VALUE 'A',
+          bstyp-kont VALUE 'K',
+          bstyp-lfpl VALUE 'L',
+          bstyp-lerf VALUE 'Q'.
+data : i_komv like komv OCCURS 0 WITH HEADER LINE.
+data : i_condition  like ISAUTO_CONDITION OCCURS 0 WITH HEADER LINE,
+       i_condition1 like ISAUTO_CONDITION OCCURS 0 WITH HEADER LINE,
+       i_condition2 like ISAUTO_CONDITION OCCURS 0 WITH HEADER LINE.
+data : return like BAPIRETURN1 OCCURS 0 WITH HEADER LINE.
+*&---------------------------------------------------------------------*
+*&      Form  GET_VEN_ADDR
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Vendor ADDRESS
+*----------------------------------------------------------------------*
+FORM get_ven_addr       TABLES in_par  STRUCTURE itcsy
+                           out_par STRUCTURE itcsy
+                           .
+  DATA : V_PAGE TYPE I.
+  DATA: v_addrnr    LIKE sadr-adrnr.
+  DATA: gv_fb_addr_get_selection  LIKE addr1_sel.
+  READ TABLE in_par INDEX 1.
+*Getting Vendor address
+  CASE in_par-name.
+    WHEN 'EKKO-ADRNR'.                " PO
+      v_addrnr = in_par-value.
+      CLEAR gv_fb_addr_get_selection.
+      IF v_addrnr IS NOT INITIAL AND v_addrnr NE 'XXXXXXXXXX'.
+* FM for addrnr conv routine
+        CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+          EXPORTING
+            input  = v_addrnr
+          IMPORTING
+            output = v_addrnr.
+
+        gv_fb_addr_get_selection-addrnumber = v_addrnr.
+* FM to get the address details
+        CALL FUNCTION 'ADDR_GET'
+          EXPORTING
+            address_selection = gv_fb_addr_get_selection
+          IMPORTING
+            sadr              = sadr.
+
+        IF sy-subrc = 0.
+          SELECT SINGLE landx FROM t005t
+                              INTO t005t-landx
+                             WHERE land1 = sadr-land1
+                               and spras = 'EN'.
+        ENDIF.
+* Assigning the addr details and returning it to SAP Script using out par
+        IF sadr-name1 IS NOT INITIAL.
+          out_par-value = sadr-name1.
+          out_par-name = 'NAME1'.
+          MODIFY out_par INDEX 1.
+        ENDIF.
+        IF sadr-strs2 IS NOT INITIAL.
+          out_par-value = sadr-strs2.
+          out_par-name = 'STRS2'.
+          MODIFY out_par INDEX 2.
+        ENDIF.
+        IF sadr-stras IS NOT INITIAL.
+          out_par-value = sadr-stras.
+          out_par-name = 'STRAS'.
+          MODIFY out_par INDEX 3.
+        ENDIF.
+        IF sadr-ort01 IS NOT INITIAL.
+          out_par-value = sadr-ort01.
+          out_par-name = 'ORT01'.
+          MODIFY out_par INDEX 4.
+        ENDIF.
+        IF sadr-regio IS NOT INITIAL.
+          out_par-value = sadr-regio.
+          out_par-name = 'REGIO'.
+          MODIFY out_par INDEX 5.
+        ENDIF.
+        IF sadr-pstlz IS NOT INITIAL.
+          out_par-value = sadr-pstlz.
+          out_par-name = 'PSTLZ'.
+          MODIFY out_par INDEX 6.
+        ENDIF.
+        IF t005t-landx IS NOT INITIAL.
+          out_par-value = t005t-landx.
+          out_par-name = 'LANDX'.
+          MODIFY out_par INDEX 7.
+        ENDIF.
+      ENDIF.
+  ENDCASE.
+ENDFORM.                    "GET_VEN_ADDR
+*  *&---------------------------------------------------------------------*
+*&      Form  GET_TOTAL
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING TOTAL
+*----------------------------------------------------------------------*
+FORM get_total       TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+
+  DATA : BEGIN OF T_TOT OCCURS 0,
+          EBELN LIKE EKKO-EBELN,
+          TOTAL LIKE EKPO-NETWR,
+         END OF T_TOT.
+  data : v_gst like ekpo-netwr,
+         v_tot like ekpo-netwr,
+         V_TMP(13).
+
+  READ TABLE in_par INDEX 1.
+  CASE in_par-name.
+    WHEN 'EKKO-EBELN'.
+      select * from ekpo into ekpo
+                         where ebeln = in_par-value.
+        t_tot-ebeln = ekpo-ebeln.
+        t_Tot-total = ekpo-netwr.
+        collect t_tot.
+      endselect.
+
+      read table t_tot index 1.
+      if sy-subrc = 0.
+        V_GST = t_tot-total / 10.
+        v_tot = t_tot-total + v_gst.
+        V_TMP = T_TOT-total.
+        condense v_tmp.
+        out_par-value =  V_TMP.
+        out_par-name = 'STOTAL'.
+        MODIFY out_par INDEX 1.
+        V_TMP = v_gst.
+        condense v_tmp.
+        out_par-value = V_tmp.
+        out_par-name = 'GST'.
+        MODIFY out_par INDEX 2.
+*          v_tmp = v_tot.
+        V_TMP = T_TOT-TOTAL.
+        condense v_tmp.
+        out_par-value = v_tmp.
+        out_par-name = 'TOTAL'.
+        MODIFY out_par INDEX 3.
+      ENDIF.
+  endcase.
+
+ENDFORM.                    "GET_TOTAL
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Buyer Details
+*----------------------------------------------------------------------*
+FORM GET_PURORG_ADDRESS      TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+
+  DATA :V_EKORG LIKE EKKO-EKORG.
+  READ TABLE in_par INDEX 1.
+  IF sy-subrc = 0.
+    v_ekorg = in_par-value.
+  ENDIF.
+  IF v_ekorg IS NOT INITIAL.
+    out_par-value = v_ekorg.
+    out_par-name = 'V_EKORG'.
+    MODIFY out_par INDEX 1.
+  ENDIF.
+ENDFORM.                    "GET_PLANT_ADDRESS
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Buyer Details
+*----------------------------------------------------------------------*
+FORM GET_DISPATCH                   TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA :v_mod(100),
+        v_freight(100),
+        v_insurance(100),
+        v_si(100),
+        v_remarks(100),
+        V_NAME LIKE THEAD-TDNAME.
+
+  DATA : T_LINE LIKE TLINE OCCURS 0 WITH HEADER LINE.
+  READ TABLE in_par INDEX 1.
+  CASE in_par-name.
+    WHEN 'EKPO-EBELN'.
+      V_NAME = in_par-VALUE .
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F01'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_mod = t_line-tdline.
+        ENDIF.
+      endif.
+      IF V_MOD IS NOT INITIAL.
+        out_par-value = V_MOD.
+        out_par-name = 'V_MOD'.
+        MODIFY out_par INDEX 1.
+      ENDIF.
+      CLEAR:T_LINE.
+      REFRESH:T_LINE.
+*
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F02'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_FREIGHT = t_line-tdline.
+        ENDIF.
+      endif.
+      IF V_FREIGHT IS NOT INITIAL.
+        out_par-value = V_FREIGHT.
+        out_par-name = 'V_FREIGHT'.
+        MODIFY out_par INDEX 2.
+      ENDIF.
+*
+      CLEAR:T_LINE.
+      REFRESH:T_LINE.
+*
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F03'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_insurance = t_line-tdline.
+        ENDIF.
+      endif.
+      IF v_insurance IS NOT INITIAL.
+        out_par-value = V_INSURANCE.
+        out_par-name = 'V_INSURANCE'.
+        MODIFY out_par INDEX 3.
+      ENDIF.
+      CLEAR:T_LINE.
+      REFRESH:T_LINE.
+*
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F04'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_SI = t_line-tdline.
+        ENDIF.
+      endif.
+      IF v_si IS NOT INITIAL.
+        out_par-value = V_SI.
+        out_par-name = 'V_SI'.
+        MODIFY out_par INDEX 4.
+      ENDIF.
+      CLEAR:T_LINE.
+      REFRESH:T_LINE.
+*
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F05'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_remarks = t_line-tdline.
+        ENDIF.
+      endif.
+      IF v_remarks IS NOT INITIAL.
+        out_par-value = V_REMARKS.
+        out_par-name = 'V_REMARKS'.
+        MODIFY out_par INDEX 5.
+      ENDIF.
+  endcase.
+ENDFORM.                    "GET_DISPATCH
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Buyer Details
+*----------------------------------------------------------------------*
+FORM GET_SPINS                  TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA : v_si(100),
+         V_NAME LIKE THEAD-TDNAME.
+
+  DATA : T_LINE LIKE TLINE OCCURS 0 WITH HEADER LINE.
+  READ TABLE in_par INDEX 1.
+  CASE in_par-name.
+    WHEN 'EKPO-EBELN'.
+      V_NAME = in_par-VALUE .
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F04'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_si = t_line-tdline.
+        ENDIF.
+      endif.
+      IF V_si IS NOT INITIAL.
+        out_par-value = V_SI.
+        out_par-name = 'V_SI'.
+        MODIFY out_par INDEX 1.
+      ENDIF.
+  ENDCASE.
+  CLEAR:T_LINE.
+  REFRESH:T_LINE.
+ENDFORM.                    "GET_SPINS
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Buyer Details
+*----------------------------------------------------------------------*
+FORM GET_REMARKS                  TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA : v_REMARKS(100),
+         V_NAME LIKE THEAD-TDNAME.
+
+  DATA : T_LINE LIKE TLINE OCCURS 0 WITH HEADER LINE.
+  READ TABLE in_par INDEX 1.
+  CASE in_par-name.
+    WHEN 'EKPO-EBELN'.
+      V_NAME = in_par-VALUE .
+      CALL FUNCTION 'READ_TEXT'
+        EXPORTING
+         CLIENT                        = SY-MANDT
+          ID                            = 'F05'
+          LANGUAGE                      = 'E'
+          NAME                          = V_NAME
+          OBJECT                        = 'EKKO'
+*   ARCHIVE_HANDLE                = 0
+*   LOCAL_CAT                     = ' '
+* IMPORTING
+*   HEADER                        =
+        TABLES
+          LINES                         =  T_LINE
+       EXCEPTIONS
+         ID                            = 1
+         LANGUAGE                      = 2
+         NAME                          = 3
+         NOT_FOUND                     = 4
+         OBJECT                        = 5
+         REFERENCE_CHECK               = 6
+         WRONG_ACCESS_TO_ARCHIVE       = 7
+         OTHERS                        = 8
+                .
+      if sy-subrc = 0.
+        READ TABLE T_LINE INDEX 1.
+        IF SY-SUBRC = 0.
+          v_REMARKS = t_line-tdline.
+        ENDIF.
+      endif.
+      IF V_REMARKS IS NOT INITIAL.
+        out_par-value = V_REMARKS.
+        out_par-name = 'V_REMARKS'.
+        MODIFY out_par INDEX 1.
+      ENDIF.
+  ENDCASE.
+  CLEAR:T_LINE.
+  REFRESH:T_LINE.
+ENDFORM.                    "GET_REMARKS
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*      Form For Getting Tin No And Vat NO
+*----------------------------------------------------------------------*
+FORM GET_NPI_DETAILS                 TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA : V_TIN(25),
+         V_CST(25).
+  READ TABLE in_par INDEX 1.
+  CASE in_par-name.
+    WHEN 'TVARVC-NAME'.
+      SELECT SINGLE LOW FROM TVARVC INTO V_TIN
+                             WHERE NAME = 'ZNPI_VAT'.
+      out_par-value = V_TIN.
+      out_par-name = 'V_TIN'.
+      MODIFY out_par INDEX 1.
+      SELECT SINGLE LOW FROM TVARVC INTO V_CST
+                             WHERE NAME = 'ZNPI_CST'.
+      out_par-value = V_CST.
+      out_par-name = 'V_CST'.
+      MODIFY out_par INDEX 2.
+  ENDCASE.
+ENDFORM.                    "GET_REMARKS
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*      Form For Getting All the Tax Related Details
+*----------------------------------------------------------------------*
+FORM TAX_DETAILS               TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA : v_vatfper(10) type p DECIMALS 2,
+         v_vattper(10) TYPE p DECIMALS 2.
+  data : i_ekpo LIKE ekpo OCCURS 0 with HEADER LINE.
+  data:  V_EBELN LIKE EKPO-EBELN,
+         v_lifnr like ekKO-lifnr,
+         v_netwr(10).
+      DATA: l_dummy(3),
+            l_dummyprice(20).
+  DATA : VV_LIFNR(10) TYPE N.
+  data : i_komp like a363 OCCURS 0 WITH HEADER LINE.
+  data : v_netvalue like ekpo-netwr.
+  clear : v_discount,
+          v_discount1,
+          v_vat,
+          v_vat1,
+          v_ed,
+          v_ed1,
+          v_ecess,
+          v_ecess1,
+          v_secess,
+          v_secess1,
+          v_cst,
+          v_cst1,
+          v_freight,
+          v_freight1,
+          v_packing,
+          v_packing1,
+          v_insurance,
+          v_insurance1,
+          v_cvd,
+          v_cvd1,
+          v_octroi,
+          v_octroi1,
+          v_entry,
+          v_entry,
+          i_ekpo,
+          v_ebeln,
+          v_lifnr,
+          v_netwr,
+          vv_lifnr,
+          taxcom,
+          i_komp,
+          v_add,
+          v_add1,
+          v_vatcess,
+          v_vatcess1,
+          v_handling,
+          v_handling1,
+          v_customs,
+          v_customs1,
+          v_addcustom,
+          v_addcustom1,
+          v_svbload,
+          v_svbload1,
+          v_assvalue,
+          v_assvalue1,
+          v_cvdecess,
+          v_cvdecess1,
+          v_cvdhcess,
+          v_cvdhcess1,
+          v_custecess,
+          v_custecess1,
+          v_custscess,
+          v_custscess1.
+
+  refresh : i_ekpo,
+            i_komp,
+            i_condition1,
+            i_komv.
+  READ TABLE in_par INDEX 1.
+  if sy-subrc = 0.
+    v_ebeln = in_par-value.
+  endif.
+  READ table in_par INDEX 2.
+  if sy-subrc = 0.
+    v_lifnr = in_par-value.
+  endif.
+
+  IF V_LIFNR CO '0123456789 '.
+    VV_LIFNR = v_LIFNR.
+    v_lifnr  = VV_LIFNR.
+  ENDIF.
+  SELECT SINGLE *
+      INTO ekko
+      FROM ekko
+     WHERE ebeln = V_EBELN .
+
+  SELECT * from ekpo INTO CORRESPONDING FIELDS
+                           OF TABLE i_ekpo
+                          where ebeln = v_ebeln.
+  LOOP AT I_EKPO.
+    clear taxcom.
+    CLEAR : I_KOMV.
+    REFRESH : I_KOMV.
+    SELECT SINGLE *
+       INTO t001
+       FROM t001
+      WHERE bukrs = ekko-bukrs .
+
+    taxcom-bukrs = i_ekpo-bukrs.
+    taxcom-budat = ekko-bedat.
+    taxcom-waers = ekko-waers.
+    taxcom-kposn = i_ekpo-ebelp.
+    taxcom-mwskz = i_ekpo-mwskz.
+    taxcom-txjcd = i_ekpo-txjcd.
+    taxcom-shkzg = 'H'.
+    taxcom-xmwst = 'X'.
+    IF ekko-bstyp EQ bstyp-best.
+*       CALL FUNCTION 'ISAUTO_SIC_GET_PRICING_INFO'
+*      EXPORTING
+*        IF_PO_NUMBER        = i_ekpo-ebeln
+*        IF_PO_ITEM          = i_ekpo-ebelp
+*      TABLES
+*        ET_CONDITIONS       = i_condition2
+*        RETURN              = return .
+*  READ TABLE i_condition2 WITH KEY cond_type = 'P000'.
+*  IF SY-SUBRC = 0.
+*    v_netvalue = I_CONDITION2-COND_PRICE.
+*  ENDIF.
+*      taxcom-wrbtr = v_netvalue.
+*      refresh : i_condition2.
+    taxcom-wrbtr = i_ekpo-netwr.
+    ELSE.
+      taxcom-wrbtr = i_ekpo-zwert.
+    ENDIF.
+
+    taxcom-lifnr = ekko-lifnr.
+    taxcom-land1 = ekko-lands.
+    taxcom-ekorg = ekko-ekorg.
+    taxcom-hwaer = t001-waers.
+    taxcom-llief = ekko-llief.
+    taxcom-bldat = ekko-bedat.
+    taxcom-matnr = i_ekpo-ematn.
+    taxcom-werks = i_ekpo-werks.
+    taxcom-bwtar = i_ekpo-bwtar.
+    taxcom-matkl = i_ekpo-matkl.
+    taxcom-meins = i_ekpo-meins.
+    taxcom-ebeln = i_ekpo-ebeln.
+    taxcom-ebelp = i_ekpo-ebelp.
+
+    IF ekko-bstyp EQ bstyp-best.
+      taxcom-mglme = i_ekpo-menge.
+    ELSE.
+      IF ekko-bstyp EQ bstyp-kont AND i_ekpo-abmng GT 0.
+        taxcom-mglme = i_ekpo-abmng.
+      ELSE.
+        taxcom-mglme = i_ekpo-ktmng.
+      ENDIF.
+    ENDIF.
+    IF taxcom-mglme EQ 0.
+      taxcom-mglme = 1000.
+    ENDIF.
+    taxcom-mtart = i_ekpo-mtart.
+    IF NOT TAXCOM-mwskz IS INITIAL.
+      CALL FUNCTION 'CALCULATE_TAX_ITEM'
+      EXPORTING
+*   ANZAHLUNG                 = ' '
+*    DIALOG                    = ' '
+*    DISPLAY_ONLY              = ' '
+*    INKLUSIVE                 = ' '
+*    I_ANWTYP                  = ' '
+*    I_DMBTR                   = '0'
+*    I_MWSTS                   = '0'
+          I_TAXCOM                  = taxcom
+*    PRUEFEN                   = ' '
+*    RESET                     = ' '
+      IMPORTING
+*    E_NAVFW                   =
+          E_TAXCOM                   = taxcom
+*    E_XSTVR                   =
+*    NAV_ANTEIL                =
+      TABLES
+          T_XKOMV                    =  i_komv
+      EXCEPTIONS
+             MWSKZ_NOT_DEFINED          = 1
+            MWSKZ_NOT_FOUND             = 2
+            MWSKZ_NOT_VALID             = 3
+              STEUERBETRAG_FALSCH       = 4
+              COUNTRY_NOT_FOUND         = 5
+             OTHERS                     = 6
+                                 .
+      IF SY-SUBRC <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+    ENDIF.
+    loop at i_komv where kschl is not initial
+                   and   kposn = i_ekpo-ebelp .
+      case i_komv-kschl.
+        WHEN 'JMOP'.
+          V_ED = V_ED + I_KOMV-KWERT.
+          V_ED1 = V_ED.
+          CONDENSE v_ed1 NO-GAPS.
+          if v_ed1 = 0.
+            clear v_ed1.
+          endif.
+          out_par-value = V_ed1.
+          out_par-name = 'V_ED1'.
+          MODIFY out_par INDEX 2.
+
+        WHEN 'JAOP'.
+          V_ED = V_ED + I_KOMV-KWERT.
+          V_ED1 = V_ED.
+          CONDENSE v_ed1 NO-GAPS.
+          if v_ed1 = 0.
+            clear v_ed1.
+          endif.
+          out_par-value = V_ed1.
+          out_par-name = 'V_ED1'.
+          MODIFY out_par INDEX 2.
+
+        WHEN 'JSOP'.
+          V_ED = V_ED + I_KOMV-KWERT.
+          V_ED1 = V_ED.
+          CONDENSE v_ed1 NO-GAPS.
+          if v_ed1 = 0.
+            clear v_ed1.
+          endif.
+          out_par-value = V_ed1.
+          out_par-name = 'V_ED1'.
+          MODIFY out_par INDEX 2.
+
+        WHEN 'ZCES'.
+          V_ECESS = V_ECESS +  I_KOMV-KWERT.
+          V_ECESS1 = V_ECESS.
+          CONDENSE v_ecess1 NO-GAPS.
+          if v_ecess1 = 0.
+            clear v_ecess1.
+          endif.
+          out_par-value = V_ECESS1.
+          out_par-name = 'V_ECESS1'.
+          MODIFY out_par INDEX 3.
+
+        WHEN 'ZECS'.
+          V_SECESS = V_SECESS +  I_KOMV-KWERT.
+          V_SECESS1 = V_SECESS.
+          CONDENSE v_secess1 NO-GAPS.
+          if v_secess1 = 0.
+            clear v_secess1.
+          endif.
+          out_par-value = V_SECESS1.
+          out_par-name = 'V_SECESS1'.
+          MODIFY out_par INDEX 4.
+
+        WHEN 'JIPS'.
+          V_CST = V_CST +  I_KOMV-KWERT.
+          V_CST1 = V_CST.
+          CONDENSE v_cst1 NO-GAPS.
+          if v_cst1 = 0.
+            clear v_cst1.
+          endif.
+          out_par-value = V_CST1.
+          out_par-name = 'V_CST1'.
+          MODIFY out_par INDEX 8.
+
+        when 'ZVAT'.
+          V_VAT = V_VAT + I_KOMV-KWERT.
+          V_VAT1 = V_VAT.
+          CONDENSE v_vat1 NO-GAPS.
+          if v_vat1 = 0.
+            clear v_vat1.
+          endif.
+          out_par-value = V_VAT1.
+          out_par-name = 'V_VAT1'.
+          MODIFY out_par INDEX 7.
+
+        when 'ZVT1'.
+          v_add = v_add + i_komv-KWERT.
+          v_add1 = v_add.
+          CONDENSE v_add1 NO-GAPS.
+          if v_add1 = 0.
+            clear v_add1.
+          endif.
+          out_par-value = v_add1.
+          out_par-name  = 'V_ADD1'.
+          MODIFY out_par INDEX 22.
+
+        WHEN 'ZVCE'.
+          v_VATCESS = v_vatcess + i_komv-KWERT.
+          v_VATCESS1 = v_VATCESS.
+          CONDENSE v_VATCESS1 NO-GAPS.
+          if v_VATCESS1 = 0.
+            clear v_VATCESS1.
+          endif.
+          out_par-value = v_VATCESS1.
+          out_par-name  = 'V_VATCESS1'.
+          MODIFY out_par INDEX 21.
+      endcase.
+
+
+    endloop.
+
+    refresh : i_komv.
+    clear   : i_komv.
+    CALL FUNCTION 'ISAUTO_SIC_GET_PRICING_INFO'
+      EXPORTING
+        IF_PO_NUMBER        = i_ekpo-ebeln
+        IF_PO_ITEM          = i_ekpo-ebelp
+      TABLES
+        ET_CONDITIONS       = i_condition
+        RETURN              = return
+              .
+    loop at i_condition where cond_type is not initial.
+      case i_condition-COND_TYPE.
+        when 'R003'.
+          V_DISCOUNT = V_DISCOUNT +  I_CONDITION-COND_PRICE.
+          V_DISCOUNT1 = V_DISCOUNT.
+          CONDENSE V_DISCOUNT1 NO-GAPS.
+          IF V_DISCOUNT1 = 0.
+            CLEAR : V_DISCOUNT1.
+          ELSE.
+            CALL FUNCTION 'CLOI_PUT_SIGN_IN_FRONT'
+              CHANGING
+                value = V_DISCOUNT1.
+          ENDIF.
+          out_par-value = V_DISCOUNT1.
+          out_par-name = 'V_DISCOUNT1'.
+          MODIFY out_par INDEX 1.
+
+        when 'SKTO'.
+          V_DISCOUNT = V_DISCOUNT +  I_CONDITION-COND_PRICE.
+          V_DISCOUNT1 = V_DISCOUNT.
+          CONDENSE V_DISCOUNT1 NO-GAPS.
+          IF V_DISCOUNT1 = 0.
+            CLEAR : V_DISCOUNT1.
+          ELSE.
+            CALL FUNCTION 'CLOI_PUT_SIGN_IN_FRONT'
+              CHANGING
+                value = V_DISCOUNT1.
+          ENDIF.
+          out_par-value = V_DISCOUNT1.
+          out_par-name = 'V_DISCOUNT1'.
+          MODIFY out_par INDEX 1.
+
+        when 'FRA1'.
+          V_FREIGHT  =  V_FREIGHT + I_CONDITION-COND_PRICE.
+          V_FREIGHT1 = V_FREIGHT.
+          condense v_freight1 NO-GAPS.
+          if v_freight1 = 0.
+            clear : v_freight1.
+          endif.
+          out_par-value = v_freight1.
+          out_par-name = 'V_FREIGHT1'.
+          MODIFY out_par INDEX 5.
+
+        when 'FRB1'.
+          V_FREIGHT  =  V_FREIGHT + I_CONDITION-COND_PRICE.
+          V_FREIGHT1 = V_FREIGHT.
+          condense v_freight1 NO-GAPS.
+          if v_freight1 = 0.
+            clear : v_freight1.
+          endif.
+          out_par-value = v_freight1.
+          out_par-name = 'V_FREIGHT1'.
+          MODIFY out_par INDEX 5.
+
+        when 'JINS'.
+          V_INSURANCE  =  V_INSURANCE + I_CONDITION-COND_PRICE.
+          V_INSURANCE1 = V_INSURANCE.
+          condense v_INSURANCE1 NO-GAPS.
+          if v_INSURANCE1 = 0.
+            clear : v_INSURANCE1.
+          endif.
+          out_par-value = v_INSURANCE1.
+          out_par-name = 'V_INSURANCE1'.
+          MODIFY out_par INDEX 6.
+
+        when 'JIN2'.
+          V_INSURANCE  =  V_INSURANCE + I_CONDITION-COND_PRICE.
+          V_INSURANCE1 = V_INSURANCE.
+          condense v_INSURANCE1 NO-GAPS.
+          if v_INSURANCE1 = 0.
+            clear : v_INSURANCE1.
+          endif.
+          out_par-value = v_INSURANCE1.
+          out_par-name = 'V_INSURANCE1'.
+          MODIFY out_par INDEX 6.
+
+        when 'JOCM'.
+          V_octroi = V_OCTROI +  I_CONDITION-COND_PRICE.
+          V_OCTROI1 = V_OCTROI.
+          CONDENSE V_OCTROI1 NO-GAPS.
+          IF V_OCTROI1 = 0.
+            CLEAR : V_OCTROI1.
+          ENDIF.
+          out_par-value = V_OCTROI1.
+          out_par-name = 'V_OCTROI1'.
+          MODIFY out_par INDEX 11.
+
+        when 'JCV1'.
+*            DATA: l_dummy(3),
+*            l_dummyprice(20).
+      l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_cvdper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_cvdper1 AT '.' INTO v_cvdper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_cvdper1
+                      i_condition-rate_unit
+                      into v_cvdper1.
+          condense v_cvdper1 NO-GAPS.
+          out_par-value = v_cvdper1.
+          out_par-name = 'V_CVDPER1'.
+          MODIFY out_par INDEX 24.
+          V_CVD = V_CVD + i_condition-COND_PRICE.
+          V_CVD1 = V_CVD.
+          CONDENSE V_CVD1 NO-GAPS.
+          IF V_CVD1 = 0.
+            CLEAR  V_CVD1.
+          ENDIF.
+          out_par-value = v_cvd1.
+          out_par-name = 'V_CVD1'.
+          MODIFY out_par INDEX 13.
+
+        WHEN 'JECV'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_cvdeper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_cvdeper1 AT '.' INTO v_cvdeper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_cvdeper1
+                      i_condition-rate_unit
+                      into v_cvdeper1.
+          condense v_cvdeper1 NO-GAPS.
+          out_par-value = v_cvdeper1.
+          out_par-name = 'V_CVDEPER1'.
+          MODIFY out_par INDEX 25.
+          v_cvdecess = v_cvdecess + i_condition-COND_PRICE.
+          v_cvdecess1 = v_cvdecess.
+          CONDENSE v_cvdecess1 NO-GAPS.
+          IF v_cvdecess1 = 0.
+            CLEAR  v_cvdecess1.
+          ENDIF.
+          out_par-value = v_cvdecess1.
+          out_par-name = 'V_CVDECESS1'.
+          MODIFY out_par INDEX 14.
+
+        WHEN 'JHCV'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_cvdhper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_cvdhper1 AT '.' INTO v_cvdhper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_cvdhper1
+                      i_condition-rate_unit
+                      into v_cvdhper1.
+          condense v_cvdhper1 NO-GAPS.
+          out_par-value = v_cvdhper1.
+          out_par-name = 'V_CVDHPER1'.
+          MODIFY out_par INDEX 26.
+          v_cvdhcess = v_cvdhcess + i_condition-COND_PRICE.
+          v_cvdhcess1 = v_cvdhcess.
+          CONDENSE v_cvdhcess1 NO-GAPS.
+          IF v_cvdhcess1 = 0.
+            CLEAR  v_cvdhcess1.
+          ENDIF.
+          out_par-value = v_cvdhcess1.
+          out_par-name = 'V_CVDHCESS1'.
+          MODIFY out_par INDEX 15.
+
+        WHEN 'ZVAD'.
+          V_entry = V_entry +  I_CONDITION-COND_PRICE.
+          V_entry1 = V_entry.
+          CONDENSE V_entry1 NO-GAPS.
+          IF V_entry1 = 0.
+            CLEAR : V_entry1.
+          ENDIF.
+          out_par-value = V_entry1.
+          out_par-name = 'V_ENTRY1'.
+          MODIFY out_par INDEX 12.
+        when 'ZA00'.
+      l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_handper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_handper1 AT '.' INTO v_handper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_handper1
+                      i_condition-rate_unit
+                      into v_handper1.
+          CONDENSE V_HANDPER1 NO-GAPS.
+             out_par-value = v_handper1.
+          out_par-name  = 'V_HANDPER1'.
+          MODIFY out_par INDEX 23.
+          v_handling = v_handling + i_condition-COND_PRICE.
+          v_handling1 = v_handling.
+          CONDENSE v_handling1 NO-GAPS.
+          if v_handling1 = 0.
+            clear : v_handling1.
+          endif.
+          out_par-value = v_handling1.
+          out_par-name  = 'V_HANDLING1'.
+          MODIFY out_par INDEX 9.
+
+        when 'JCDB'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_cusper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_cusper1 AT '.' INTO v_cusper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_cusper1
+                      i_condition-rate_unit
+                      into v_cusper1.
+          condense v_cusper1 NO-GAPS.
+          out_par-value = v_cusper1.
+          out_par-name = 'V_CUSPER1'.
+          MODIFY out_par INDEX 27.
+          v_customs = v_customs + i_condition-COND_PRICE.
+          v_customs1 = v_customs.
+          CONDENSE v_customs1 NO-GAPS.
+          if v_customs1 = 0.
+            clear : v_customs1.
+          endif.
+          out_par-value = v_customs1.
+          out_par-name  = 'V_CUSTOMS1'.
+          MODIFY out_par INDEX 16.
+
+        WHEN 'JEDB'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_custeper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_custeper1 AT '.' INTO v_custeper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_custeper1
+                      i_condition-rate_unit
+                      into v_custeper1.
+          condense v_custeper1 NO-GAPS.
+          out_par-value = v_custeper1.
+          out_par-name = 'V_CUSTEPER1'.
+          MODIFY out_par INDEX 28.
+          v_custecess = v_custecess + i_condition-COND_PRICE.
+          v_custecess1 = v_custecess.
+          CONDENSE v_custecess1 NO-GAPS.
+          if v_custecess1 = 0.
+            clear : v_custecess1.
+          endif.
+          out_par-value = v_custecess1.
+          out_par-name  = 'V_CUSTECESS1'.
+          MODIFY out_par INDEX 17.
+
+        when 'JHDB'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_custhper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_custhper1 AT '.' INTO v_custhper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_custhper1
+                      i_condition-rate_unit
+                      into v_custhper1.
+          condense v_custhper1 NO-GAPS.
+          out_par-value = v_custhper1.
+          out_par-name = 'V_CUSTHPER1'.
+          MODIFY out_par INDEX 29.
+          v_custscess = v_custscess + i_condition-COND_PRICE.
+          v_custscess1 = v_custscess.
+          CONDENSE v_custscess1 NO-GAPS.
+          if v_custscess1 = 0.
+            clear : v_custscess1.
+          endif.
+          out_par-value = v_custscess1.
+          out_par-name  = 'V_CUSTSCESS1'.
+          MODIFY out_par INDEX 18.
+
+        WHEN 'JADC'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_addper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_addper1 AT '.' INTO v_addper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_addper1
+                      i_condition-rate_unit
+                      into v_addper1.
+          condense v_addper1 NO-GAPS.
+          out_par-value = v_addper1.
+          out_par-name = 'V_ADDPER1'.
+          MODIFY out_par INDEX 30.
+          v_addcustom = v_addcustom + i_condition-COND_PRICE.
+          v_addcustom1 = v_addcustom.
+          CONDENSE v_addcustom1 NO-GAPS.
+          if v_addcustom1 = 0.
+            clear : v_addcustom1.
+          endif.
+          out_par-value = v_addcustom1.
+          out_par-name = 'V_ADDCUSTOM1'.
+          MODIFY out_par index 19.
+        WHEN 'ZSVB'.
+                l_dummyprice = i_condition-COND_VALUE.
+          split l_dummyprice  AT '.' INTO v_svbper1 l_dummy.
+          IF l_dummy CO ' 0'.
+        SPLIT v_svbper1 AT '.' INTO v_svbper1 l_dummy.
+*        v_handper1 = v_handper.
+      ENDIF.
+
+          CONCATENATE v_svbper1
+                      i_condition-rate_unit
+                      into v_svbper1.
+          condense v_svbper1 NO-GAPS.
+          out_par-value = v_svbper1.
+          out_par-name = 'V_SVBPER1'.
+          MODIFY out_par INDEX 31.
+          v_svbload = v_svbload + i_condition-COND_PRICE.
+          v_svbload1 = v_svbload.
+          CONDENSE v_svbload1 NO-GAPS.
+          if v_svbload1 = 0.
+            clear : v_svbload1.
+          endif.
+          out_par-value = v_svbload1.
+          out_par-name  = 'V_SVBLOAD1'.
+          MODIFY out_par index 20.
+      endcase.
+    endloop.
+    refresh : i_condition.
+    clear   : i_condition.
+  endloop.
+  DATA : BEGIN OF T_TOT OCCURS 0,
+          EBELN LIKE EKKO-EBELN,
+          TOTAL LIKE EKPO-NETWR,
+         END OF T_TOT.
+  data : v_tmp1(15).
+  select * from ekpo into ekpo
+                      where ebeln = v_ebeln.
+    t_tot-ebeln = ekpo-ebeln.
+    t_Tot-total = ekpo-netwr.
+    collect t_tot.
+  endselect.
+  READ TABLE t_tot index 1.
+  v_tmp1 = t_tot-total.
+  if v_handling1 is not initial.
+  v_assvalue = v_grandtotal1 + v_handling1.
+  v_assvalue1 = v_assvalue.
+  out_par-value = v_assvalue1.
+  out_par-name = 'V_ASSVALUE1'.
+  MODIFY out_par INDEX 10.
+  endif.
+  GRAND_TOTAL = v_grandtotal1 + V_DISCOUNT1
+                       + V_VAT1
+                       + V_ED1
+                       + V_ECESS1
+                       + V_SECESS1
+                       + V_CST1
+                       + V_FREIGHT1
+*                      + V_PACKING1
+                       + V_INSURANCE1
+                       + V_CVD1
+                       + V_OCTROI1
+                       + V_ENTRY1
+                       + V_HANDLING1
+                       + V_CUSTOMS1
+                       + V_ADDCUSTOM1
+                       + V_SVBLOAD1
+                       + V_VATCESS1
+                       + V_ADD1
+                       + v_cvdecess1
+                       + v_cvdhcess1
+                       + v_custecess1
+                       + v_custscess1.
+  G_TOTAL = GRAND_TOTAL.
+  out_par-value = G_TOTAL.
+  out_par-name = 'G_TOTAL'.
+  MODIFY out_par INDEX 32.
+ENDFORM.                    "GET_REMARKS
+*&---------------------------------------------------------------------*
+*&      Form  Get_Price
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Price Details
+*----------------------------------------------------------------------*
+FORM get_price                 TABLES in_par  STRUCTURE itcsy
+                                      out_par STRUCTURE itcsy.
+  DATA : V_EBELN LIKE EKPO-EBELN,
+         V_EBELP LIKE EKPO-EBELP,
+         V_KBETR LIKE KOMV-KBETR,
+         V_KWERT LIKE KOMV-KWERT,
+         V_UNITPRICE(20),
+         V_AMOUNT(20).
+  data : begin of t_ebeln occurs 0,
+         ebeln like ekpo-ebeln,
+                ebelp like ekpo-ebelp,
+         end of t_ebeln.
+clear : V_VAT1,
+        v_ed1,
+        v_ecess1,
+        v_secess1.
+
+  READ TABLE in_par INDEX 1.
+  if sy-subrc = 0.
+    v_ebeln = in_par-value.
+  endif.
+  READ table in_par INDEX 2.
+  if sy-subrc = 0.
+    v_ebelp = in_par-value.
+  endif.
+  select ebeln ebelp from ekpo into CORRESPONDING FIELDS OF TABLE t_ebeln
+                                 where ebeln = v_ebeln.
+  READ TABLE t_ebeln INDEX 1.
+  if v_ebelp = t_ebeln-ebelp.
+    clear cnt.
+  endif.
+  cnt = cnt + 1.
+  if cnt = 1.
+    clear : v_grandtotal,
+          v_grandtotal1.
+  endif.
+  CALL FUNCTION 'ISAUTO_SIC_GET_PRICING_INFO'
+      EXPORTING
+        IF_PO_NUMBER        = V_EBELN
+        IF_PO_ITEM          = V_EBELP
+      TABLES
+        ET_CONDITIONS       = i_condition1
+        RETURN              = return .
+
+  READ TABLE i_condition1 WITH KEY cond_type = 'P000'.
+  IF SY-SUBRC = 0.
+    V_KBETR = I_CONDITION1-COND_VALUE.
+    V_KWERT = i_condition1-COND_PRICE.
+  ENDIF.
+  IF V_KBETR IS NOT INITIAL.
+    V_UNITPRICE = V_KBETR.
+    CONDENSE V_UNITPRICE NO-GAPS.
+    out_par-value = V_UNITPRICE.
+    out_par-name = 'V_UNITPRICE'.
+    MODIFY out_par INDEX 1.
+  ENDIF.
+  if V_KWERT is not initial.
+    V_AMOUNT = v_kwert.
+    CONDENSE V_AMOUNT NO-GAPS.
+    out_par-value = V_AMOUNT.
+    out_par-name = 'V_AMOUNT'.
+    MODIFY out_par INDEX 2.
+    V_GRANDTOTAL = V_AMOUNT + V_GRANDTOTAL.
+    v_grandtotal1 = v_grandtotal.
+    CONDENSE V_GRANDTOTAL1 NO-GAPS.
+    out_par-value = V_GRANDTOTAL1.
+    out_par-name = 'V_GRANDTOTAL1'.
+    MODIFY out_par INDEX 3.
+  endif.
+
+ENDFORM.                    "get_price
+*&---------------------------------------------------------------------*
+*&      Form  GET_BUYER_DET
+*&---------------------------------------------------------------------*
+*       FORM FOR GETTING Buyer Details
+*----------------------------------------------------------------------*
+FORM GET_buyer_det      TABLES in_par  STRUCTURE itcsy
+                                     out_par STRUCTURE itcsy.
+  loop at in_par.
+    CASE in_par-name.
+      WHEN 'EKKO-ZTERM'.
+        SELECT SINGLE text1 FROM t052u
+                            INTO t052u-text1
+                           WHERE zterm = in_par-value
+                             and spras = 'EN'.
+        IF sy-subrc = 0.
+          out_par-value = T052U-TEXT1.
+          out_par-name = 'TEXT1'.
+          MODIFY out_par INDEX 5.
+        ENDIF.
+    ENDCASE.
+  ENDLOOP.
+
+endform.                    "GET_buyer_det

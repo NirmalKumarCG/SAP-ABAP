@@ -1,0 +1,547 @@
+*----------------------------------------------------------------------*
+* Report       : ZFI_CUST_INV_CREATE                                   *
+* Version      : 1.0                                                   *
+* Application  : FI                                                    *
+* Date created : 07 MAR 2009                                           *
+* Description  : BDC PROGRAM for Uploading/Posting Cust Inv/Open Items *
+*                                                                      *
+*----------------------------------------------------------------------*
+* Modification History                                                 *
+*----------------------------------------------------------------------*
+* Request no. |Date       |Programmer      | Description               *
+*----------------------------------------------------------------------*
+*             |07.03.2009 |Naveen K George |                           *
+*----------------------------------------------------------------------*
+* Upload File Format   = xls                                           *
+* Download File Format = xls                                           *
+*----------------------------------------------------------------------*
+REPORT zfi_cust_inv_create
+       NO STANDARD PAGE HEADING LINE-SIZE 255.
+
+*--Includes
+INCLUDE bdcrecx1.
+
+*--------------------------------------------------------------------*
+*  Data Declaration
+*--------------------------------------------------------------------*
+*--Type-pools
+TYPE-POOLS : truxs.
+TYPES : BEGIN OF t_data,
+        post_key(2),          "posting Key
+        gl_account(10),       "Account
+        amount(13),           "Amount
+        ref_doc(18),          "Ref Doc No
+        doc_txt(40),          "Document txt
+        profit_center(10),    "Profit Center
+        cost_center(10),      "Cost center
+        tax(2),               "Tax Code
+        h_l(1),               "Header / Line item flag
+        doc_no(1),            "Document No to find header and its corr line item
+        txt(5000),            "Text/Comments/Error/Success msges
+       END OF t_data.
+
+DATA: it_raw TYPE truxs_t_text_data.
+DATA : g_succ(5) TYPE n VALUE 0,  "Success records cnt
+       g_fail(5) TYPE n VALUE 0,  "Failure records cnt
+       g_tot(7)     TYPE n.       "Total records cnt
+*-- Internal table to hold flat file data
+DATA t_data1 TYPE STANDARD TABLE OF t_data WITH HEADER LINE.
+*--Header table to hold header info to be passed in as Header information of
+*     cust inv
+DATA: BEGIN OF t_head OCCURS 0,
+       doc_no(5) TYPE c,        "Document No to find header and its corr line item
+       ind(1),                  "Flag to indicate header or line item
+       doc_date(10),            "Document Date
+*       ACCOUNT(10),
+       doc_type(2),             "Document Type
+       comp_code(4),            "Company Code
+       post_date(10),           "Posting Date
+       period(3),               "Period
+       curr(3),                 "Currency
+       ref(10),                 "Reference Doc No
+       head_txt(20),            "Document header txt
+      END OF t_head.
+*--Item table to hold item information of the customer invoice to be posted
+DATA: BEGIN OF t_item OCCURS 0,
+       doc_no(5) TYPE c,        "Document No to find header and its corr line item
+       ind(2),                  "Flag to indicate header or line item
+       post_key(2),             "Posting Key
+       account(10),             "Account
+       amount(13),              "Amount
+       bus_area(4),             "Bus area
+       tax_code(2),             "Tax Code
+       calc_tax(1),             "Calcaulate tax
+       cost_center(10),         "Cost Center
+       profit_center(10),       "Profit center
+       text(50),
+       pay_method,
+       pay_terms(4),
+       bline_date(10),
+      END OF t_item.
+*-- Table to hold error records
+DATA t_err TYPE STANDARD TABLE OF t_data WITH HEADER LINE.
+*-- Table to hold Success records
+DATA t_succ TYPE STANDARD TABLE OF t_data WITH HEADER LINE.
+
+*--------------------------------------------------------------------*
+*  Selection Screen
+*--------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK bl02 WITH FRAME TITLE custmas.
+PARAMETERS:  p_ddate LIKE sy-datum,
+             p_pdate LIKE sy-datum,
+             p_gl(10),
+*             p_type    LIKE bkpf-blart MODIF ID a DEFAULT 'DR',
+             p_ccode   LIKE bkpf-bukrs DEFAULT 'NPIN',
+             p_period(2) DEFAULT '11',
+             p_curr    LIKE bkpf-waers DEFAULT 'INR'.
+*             p_ref(18),
+*             p_txt(40).
+PARAMETERS:  p_file    LIKE rlgrap-filename DEFAULT 'C:\' OBLIGATORY,
+             p_err     LIKE rlgrap-filename DEFAULT 'C:\TEMP\ERROR.XLS' OBLIGATORY,
+             p_head    AS CHECKBOX DEFAULT 'X'.
+SELECTION-SCREEN END OF BLOCK bl02.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  PERFORM 100_get_file USING p_file.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_err.
+  PERFORM 100_get_file USING p_err.
+
+START-OF-SELECTION.
+  IF p_file IS INITIAL.
+    MESSAGE 'Please Specify Upload file' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_err IS INITIAL.
+    MESSAGE 'Please Specify Download file' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_ddate IS INITIAL.
+    MESSAGE 'Please Specify Document date' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_gl IS INITIAL.
+    MESSAGE 'Please Specify G/L Account' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_pdate IS INITIAL.
+    MESSAGE 'Please Specify Posting date' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+*  ELSEIF p_type IS INITIAL.
+*    MESSAGE 'Please Specify Documetn type' TYPE 'S' DISPLAY LIKE 'E'.
+*    EXIT.
+  ELSEIF p_ccode IS INITIAL.
+    MESSAGE 'Please Specify Company code' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_period IS INITIAL.
+    MESSAGE 'Please Specify Period' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF p_curr IS INITIAL.
+    MESSAGE 'Please Specify Currency' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*-- perform to Upload File data to Internal table
+  PERFORM 200_upload_file.
+*--Perform to Split header and line items
+  PERFORM 300_fill_hl_table.
+*--Perform to create Cust Inv via BDC
+  PERFORM 400_create_custinv.
+*--Perform to Download Error records if any
+  PERFORM 500_download.
+
+*&---------------------------------------------------------------------*
+*&      Form  100_GET_FILE
+*&---------------------------------------------------------------------*
+*       Get FIle
+*----------------------------------------------------------------------*
+FORM 100_get_file  USING    p_filename.
+  CALL FUNCTION 'F4_FILENAME'
+* EXPORTING
+*   PROGRAM_NAME        = SYST-CPROG
+*   DYNPRO_NUMBER       = SYST-DYNNR
+*   FIELD_NAME          = ' '
+   IMPORTING
+     file_name           = p_filename.
+ENDFORM.                    " 100_GET_FILE
+
+
+*&---------------------------------------------------------------------*
+*&      Form  200_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Upload file
+*----------------------------------------------------------------------*
+FORM 200_upload_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+      i_line_header               = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_file
+     TABLES
+       i_tab_converted_data       = t_data1
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " 200_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  300_FILL_HL_TABLE
+*&---------------------------------------------------------------------*
+*       Split flat file data and Fill header and line item table
+*----------------------------------------------------------------------*
+FORM 300_fill_hl_table .
+  DATA l_cnt TYPE i.
+  DATA l_tmp(2) TYPE n.
+  LOOP AT t_data1.
+    CONDENSE t_data1-post_key.
+    CONDENSE t_data1-gl_account.
+    CONDENSE t_data1-amount.
+    CONDENSE t_data1-profit_center.
+    CONDENSE t_data1-cost_center.
+    CONDENSE t_data1-tax.
+    CONDENSE t_data1-h_l.
+    CONDENSE t_data1-doc_no.
+    CONDENSE t_data1-ref_doc.
+    CONDENSE t_data1-doc_txt.
+    l_cnt = l_cnt + 1.
+    t_head-ind = 'H'.
+    t_head-doc_no    = l_cnt."t_data1-doc_no.
+*      t_head-doc_date  = p_ddate."'20081130'. "sy-datum.
+    IF t_data1-post_key CO '0123456789 '.
+      l_tmp = t_data1-post_key.
+      t_data1-post_key = l_tmp.
+    ENDIF.
+    CONCATENATE p_ddate+6(2)
+                '.'
+                p_ddate+4(2)
+                '.'
+                p_ddate(4)
+          INTO t_head-doc_date.
+    CONCATENATE p_pdate+6(2)
+                '.'
+                p_pdate+4(2)
+                '.'
+                p_pdate(4)
+          INTO t_head-post_date.
+    IF t_data1-post_key = '01' OR t_data1-post_key = '50'.
+      t_head-doc_type         = 'DR'.
+    ELSEIF t_data1-post_key = '40' OR t_data1-post_key = '11'.
+      t_head-doc_type         = 'DG'.
+    ENDIF.
+*      t_head-doc_type  = p_type.
+    t_head-comp_code = p_ccode.
+*      t_head-post_date = p_pdate."'20081130'."sy-datum.
+    t_head-period    = p_period.
+    t_head-curr      = p_curr.
+    t_head-ref       = t_data1-ref_doc.
+    t_head-head_txt  = t_data1-doc_txt.
+    APPEND t_head.
+    t_item-ind            = 'L1'.
+    t_item-doc_no         = l_cnt."t_data1-doc_no.
+    t_item-post_key       = t_data1-post_key.
+    t_item-account        = t_data1-gl_account.
+*      IF p_type = 'DR'.
+*        IF t_data1-post_key = '11' OR t_data1-post_key = '50'.
+*          t_item-amount         = '-1' * t_data1-amount.
+*        ELSEIF t_data1-post_key = '40' OR t_data1-post_key = '01'.
+*          t_item-amount         = t_data1-amount.
+*        ENDIF.
+*      ENDIF.
+    t_item-amount         = t_data1-amount.
+    IF t_data1-cost_center IS NOT INITIAL.
+      t_item-cost_center    = t_data1-cost_center.
+    ENDIF.
+    t_item-bus_area       = ' '.
+    t_item-tax_code       = t_data1-tax.
+    t_item-calc_tax       = ' '.
+    t_item-cost_center    = ' '.
+    IF t_data1-profit_center IS NOT INITIAL.
+      t_item-profit_center  = t_data1-profit_center.
+    ENDIF.
+    APPEND t_item.
+
+    t_item-ind                = 'L2'.
+    t_item-doc_no             = l_cnt."t_data1-doc_no.
+    IF t_data1-post_key = '11'.
+      t_item-post_key         = '40'.
+    ELSEIF t_data1-post_key = '01'.
+      t_item-post_key         = '50'.
+    ELSEIF t_data1-post_key = '50'.
+      t_item-post_key         = '40'.
+    ENDIF.
+    t_item-account            = p_gl.
+*      IF p_type = 'DR'.
+*        IF t_item-post_key = '11' OR t_data1-post_key = '50'.
+*          t_item-amount         = '-1' * t_data1-amount.
+*        ELSEIF t_item-post_key = '40' OR t_data1-post_key = '01'.
+*          t_item-amount         = t_data1-amount.
+*        ENDIF.
+*      ENDIF.
+    t_item-amount         = t_data1-amount.
+    IF t_data1-cost_center IS NOT INITIAL.
+      t_item-cost_center    = t_data1-cost_center.
+    ENDIF.
+    t_item-bus_area         = ' '.
+    t_item-tax_code         = t_data1-tax.
+    t_item-calc_tax         = ' '.
+    t_item-cost_center      = ' '.
+    IF t_data1-profit_center IS NOT INITIAL.
+      t_item-profit_center  = t_data1-profit_center.
+    ENDIF.
+    APPEND t_item.
+  ENDLOOP.
+ENDFORM.                    " 300_FILL_HL_TABLE
+
+*&---------------------------------------------------------------------*
+*&      Form  400_CREATE_CUSTINV
+*&---------------------------------------------------------------------*
+*       Create Customer Invoice via BDC
+*----------------------------------------------------------------------*
+FORM 400_create_custinv .
+  PERFORM open_group.
+  LOOP AT t_head.
+    PERFORM bdc_dynpro      USING 'SAPMF05A' '0100'.
+    PERFORM bdc_field       USING 'BDC_CURSOR'    'RF05A-NEWKO'.
+    PERFORM bdc_field       USING 'BDC_OKCODE'    '/00'.
+    PERFORM bdc_field       USING 'BKPF-BLDAT'    t_head-doc_date.
+    PERFORM bdc_field       USING 'BKPF-BLART'    t_head-doc_type.
+    PERFORM bdc_field       USING 'BKPF-BUKRS'    t_head-comp_code.
+    PERFORM bdc_field       USING 'BKPF-BUDAT'    t_head-post_date.
+    PERFORM bdc_field       USING 'BKPF-MONAT'    t_head-period.
+    PERFORM bdc_field       USING 'BKPF-WAERS'    t_head-curr.
+    PERFORM bdc_field       USING 'BKPF-XBLNR'    t_head-ref.
+    PERFORM bdc_field       USING 'BKPF-BKTXT'    t_head-head_txt.
+    PERFORM bdc_field       USING 'FS006-DOCID'   '*'.
+
+    LOOP AT t_item WHERE doc_no = t_head-doc_no AND ind = 'L1'.
+      PERFORM bdc_field       USING 'RF05A-NEWBS'   t_item-post_key.
+      PERFORM bdc_field       USING 'RF05A-NEWKO'   t_item-account.
+
+      PERFORM bdc_dynpro      USING 'SAPMF05A' '0301'.
+      PERFORM bdc_field       USING 'BDC_CURSOR'    'RF05A-NEWKO'.
+      PERFORM bdc_field       USING 'BDC_OKCODE'    '/00'.
+      PERFORM bdc_field       USING 'BSEG-WRBTR'    t_item-amount.
+      PERFORM bdc_field       USING 'BSEG-MWSKZ'    '**'.
+      PERFORM bdc_field       USING 'BSEG-ZTERM'    ''.
+      PERFORM bdc_field       USING 'BSEG-ZBD1T'    ' '.
+      PERFORM bdc_field       USING 'BSEG-ZBD1P'    ' '.
+      PERFORM bdc_field       USING 'BSEG-ZBD2T'    ' '.
+      PERFORM bdc_field       USING 'BSEG-ZFBDT'    t_head-doc_date.
+*    PERFORM bdc_field       USING 'RF05A-NEWBS'   t_item-post_key."'50'.
+*    PERFORM bdc_field       USING 'RF05A-NEWKO'   t_item-account."'9000000'.
+    ENDLOOP.
+***********************Naveen**********************************************
+*    LOOP AT t_item WHERE doc_no = t_head-doc_no AND ind = 'L2'.
+*      PERFORM bdc_field       USING 'RF05A-NEWBS'   t_item-post_key.
+*      PERFORM bdc_field       USING 'RF05A-NEWKO'   t_item-account.
+*      PERFORM bdc_dynpro      USING 'SAPMF05A' '0300'.
+*      PERFORM bdc_field       USING 'BDC_CURSOR'    'BSEG-WRBTR'.
+*      PERFORM bdc_field       USING 'BDC_OKCODE'    '=AB'.
+*      PERFORM bdc_field       USING 'BSEG-WRBTR'    '*'.
+*      PERFORM bdc_field       USING 'DKACB-FMORE'   'X'.
+*    ENDLOOP.
+*
+*    PERFORM bdc_dynpro      USING 'SAPLKACB' '0002'.
+*    PERFORM bdc_field       USING 'BDC_CURSOR'    'COBL-GSBER'.
+*    PERFORM bdc_field       USING 'BDC_OKCODE'    '=ENTE'.
+*
+*    PERFORM bdc_dynpro      USING 'SAPMF05A' '0700'.
+*    PERFORM bdc_field       USING 'BDC_CURSOR'    'RF05A-NEWBS'.
+*    PERFORM bdc_field       USING 'BDC_OKCODE'    '=BU'.
+*************************************************************************
+
+*********************Gnana************************************************
+    LOOP AT t_item WHERE doc_no = t_head-doc_no AND ind = 'L2'.
+      PERFORM bdc_field       USING 'RF05A-NEWBS'   t_item-post_key.
+      PERFORM bdc_field       USING 'RF05A-NEWKO'   t_item-account.
+      PERFORM bdc_dynpro      USING 'SAPMF05A'      '0300'.
+      PERFORM bdc_field       USING 'BDC_CURSOR'    'BSEG-WRBTR'.
+      PERFORM bdc_field       USING 'BDC_OKCODE'    '=AB'.
+      PERFORM bdc_field       USING 'BSEG-WRBTR'    '*'.
+
+      perform bdc_field       using 'DKACB-FMORE'   'X'.
+      perform bdc_dynpro      using 'SAPLKACB'      '0002'.
+      perform bdc_field       using 'BDC_CURSOR'    'COBL-PRCTR'.
+      perform bdc_field       using 'BDC_OKCODE'    'ENTE'.
+
+      perform bdc_field       using 'COBL-PRCTR'    t_item-profit_center."'711'.
+      perform bdc_dynpro      using 'SAPMF05A'     '0700'.
+*      perform bdc_field       using 'BDC_CURSOR'   'RF05A-NEWBS'.
+      perform bdc_field       using 'BDC_OKCODE'   '=BU'.
+    ENDLOOP.
+*************************************************************************
+
+    PERFORM bdc_transaction USING 'FB01'.
+*-----Error handling.
+    READ TABLE messtab WITH KEY msgtyp = 'E'.
+    IF sy-subrc = 0.
+      LOOP AT t_item WHERE doc_no = t_head-doc_no.
+        t_err-post_key = t_item-post_key.
+        t_err-gl_account = t_item-account.
+        t_err-amount  = t_item-amount.
+        t_err-ref_doc = t_head-ref.
+        t_err-doc_txt = t_head-head_txt.
+        PERFORM mess_description.
+        APPEND t_err .
+      ENDLOOP.
+      g_fail = g_fail + 1.
+    ELSE.
+      READ TABLE messtab WITH KEY msgtyp = 'S'.
+      IF sy-subrc = 0.
+        LOOP AT t_item WHERE doc_no = t_head-doc_no.
+          IF ( NOT messtab-msgv1 IS INITIAL AND
+             NOT messtab-msgv2 IS INITIAL AND
+             NOT messtab-msgv3 IS INITIAL ).
+            CONCATENATE messtab-msgv3
+                        ' '
+                        messtab-msgv1
+                        ' '
+                        messtab-msgv2
+                        ' '
+                        'is created'
+                        INTO t_succ-txt.
+          ELSE.
+            PERFORM mess_description.
+          ENDIF.
+          t_succ-post_key   = t_item-post_key.
+          t_succ-gl_account = t_item-account.
+          t_succ-amount     = t_item-amount.
+          t_succ-ref_doc = t_head-ref.
+          t_succ-doc_txt = t_head-head_txt.
+          APPEND t_succ.
+          g_succ = g_succ + 1.
+        endloop.
+      ENDIF.
+    ENDIF.
+    CLEAR : messtab.
+    REFRESH messtab[].
+  ENDLOOP.
+  PERFORM close_group.
+ENDFORM.                    " 400_CREATE_CUSTINV
+
+*&---------------------------------------------------------------------*
+*&      Form  MESS_DESCRIPTION
+*&---------------------------------------------------------------------*
+*       Message Description
+*----------------------------------------------------------------------*
+FORM mess_description .
+  CALL FUNCTION 'FORMAT_MESSAGE'
+    EXPORTING
+      id   = messtab-msgid
+      lang = sy-langu
+      no   = messtab-msgnr
+    IMPORTING
+      msg  = t_err-txt.
+ENDFORM.                    " MESS_DESCRIPTION
+
+*&---------------------------------------------------------------------*
+*&      Form  500_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Download success and error data
+*----------------------------------------------------------------------*
+FORM 500_download .
+  IF NOT t_err[] IS INITIAL.
+*-----Header.
+    t_err-post_key    = 'PK'.
+    t_err-gl_account  = 'Customer'.
+    t_err-amount      = 'Amount'.
+    t_err-ref_doc     = 'Ref Doc'.
+    t_err-doc_txt     = 'Doc Text'.
+    t_err-txt         = 'Comments'.
+    INSERT t_err INDEX 1.
+    CLEAR  t_err.
+*-----Control Information.
+    INSERT t_err INDEX 2.
+    CONCATENATE 'No of Error Records :'
+                g_fail
+                INTO t_err-txt .
+    INSERT t_err INDEX 3.
+    CLEAR  t_err.
+    CONCATENATE 'No of Success Records :'
+                g_succ
+                INTO t_err-txt.
+    INSERT t_err INDEX 4.
+    CLEAR  t_err.
+    g_tot = g_succ + g_fail.
+    CONCATENATE 'Total No of Records :'
+                 g_tot
+                INTO t_err-txt.
+    INSERT t_err INDEX 5.
+    CLEAR t_err.
+    INSERT t_err INDEX 6.
+    CLEAR t_err.
+    APPEND T_ERR.
+    APPEND T_ERR.
+    t_err-txt = 'Success Records'.
+    append t_err.
+    CLEAR t_err.
+    INSERT t_err INDEX 9.
+    LOOP AT t_succ.
+      MOVE-CORRESPONDING t_succ TO t_err.
+      APPEND t_err.
+    ENDLOOP.
+    DATA l_filename TYPE string.
+    l_filename = p_err.
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+*         BIN_FILESIZE                    =
+        filename                        = l_filename
+       filetype                        = 'ASC'
+*         APPEND                          = ' '
+       write_field_separator           = 'X'
+*         HEADER                          = '00'
+*         TRUNC_TRAILING_BLANKS           = ' '
+*         WRITE_LF                        = 'X'
+*         COL_SELECT                      = ' '
+*         COL_SELECT_MASK                 = ' '
+*         DAT_MODE                        = ' '
+*         CONFIRM_OVERWRITE               = ' '
+*         NO_AUTH_CHECK                   = ' '
+*         CODEPAGE                        = ' '
+*         IGNORE_CERR                     = ABAP_TRUE
+*         REPLACEMENT                     = '#'
+*         WRITE_BOM                       = ' '
+*         TRUNC_TRAILING_BLANKS_EOL       = 'X'
+*         WK1_N_FORMAT                    = ' '
+*         WK1_N_SIZE                      = ' '
+*         WK1_T_FORMAT                    = ' '
+*         WK1_T_SIZE                      = ' '
+*         WRITE_LF_AFTER_LAST_LINE        = ABAP_TRUE
+*         SHOW_TRANSFER_STATUS            = ABAP_TRUE
+*       IMPORTING
+*         FILELENGTH                      =
+      TABLES
+        data_tab                        = t_err[]
+*         FIELDNAMES                      =
+     EXCEPTIONS
+       file_write_error                = 1
+       no_batch                        = 2
+       gui_refuse_filetransfer         = 3
+       invalid_type                    = 4
+       no_authority                    = 5
+       unknown_error                   = 6
+       header_not_allowed              = 7
+       separator_not_allowed           = 8
+       filesize_not_allowed            = 9
+       header_too_long                 = 10
+       dp_error_create                 = 11
+       dp_error_send                   = 12
+       dp_error_write                  = 13
+       unknown_dp_error                = 14
+       access_denied                   = 15
+       dp_out_of_memory                = 16
+       disk_full                       = 17
+       dp_timeout                      = 18
+       file_not_found                  = 19
+       dataprovider_exception          = 20
+       control_flush_error             = 21
+       OTHERS                          = 22
+              .
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    else.
+      WRITE : / 'Error Files Downloaded to:', p_err.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " 500_DOWNLOAD

@@ -1,0 +1,409 @@
+report ZF_FB01_UPLOAD
+       no standard page heading line-size 255.
+TYPE-POOLS : truxs.
+* include program for common routines for interface programs
+DATA: zzret_code LIKE sy-subrc,
+      v_open.
+DATA: it_raw TYPE truxs_t_text_data.
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+* format of the input file
+DATA : BEGIN OF t_indata OCCURS 0,
+        pskey   like RF05A-NEWBS,
+        accno   like RF05A-NEWKO,
+        amount(15)  TYPE c," BSEG-WRBTR,
+        pcenter like COBL-PRCTR,
+       END OF t_indata.
+
+*Format for Download file
+DATA : BEGIN OF t_err OCCURS 0,
+        pskey   like RF05A-NEWBS,
+        accno   like RF05A-NEWKO,
+        amount(15)  TYPE c,
+        pcenter like COBL-PRCTR,
+        desc       TYPE string, " Description
+       END OF t_err.
+*Message tab for BDC
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+DATA : w_intial LIKE t_err.
+*Final internal table for Download
+*DATA : t_fdown LIKE w_intial OCCURS 0 WITH HEADER LINE.
+DATA :g_mess TYPE string.
+DATA : g_datefr(10)  TYPE c,
+       g_dateto(10)  TYPE c,
+       g_kbetr(13)   TYPE c.
+data : g_tabix type i.
+*include bdcrecx1.
+INCLUDE zbdcincl.
+*include bdcrecx1.
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename MODIF ID a           "Upload File
+                         DEFAULT 'c:\temp\parbcust.xls' OBLIGATORY,
+            p_head      AS CHECKBOX MODIF ID a,                   "Header Line
+            p_vfrom     like sy-datum,
+            p_vato      LIKE sy-datum,
+            p_com       like BKPF-BUKRS,
+            p_type      like BKPF-BLART,
+            p_prd       like BKPF-MONAT,
+            p_curr      like BKPF-WAERS,
+*            p_test      AS CHECKBOX MODIF ID a,     " test run? X or Y for yes
+            p_sess(12)  TYPE  c  MODIF ID a,                      "Session name
+            p_mode      MODIF ID a.                               "Mode for BDC
+PARAMETERS: p_rest      LIKE rlgrap-filename MODIF ID a           "Dwonload File Path
+                         DEFAULT 'c:\temp\Success.xls' OBLIGATORY.
+SELECTION-SCREEN : END OF BLOCK 001.
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+
+start-of-selection.
+TRANSLATE p_upl TO LOWER CASE.
+*Upload to internal table
+  PERFORM upload_file USING p_upl.
+*If no records in Internal table
+  IF t_indata[] IS INITIAL .
+    WRITE: / 'No records were uploaded'.
+    ULINE.
+    EXIT.
+  ENDIF.
+LOOP AT t_indata.
+  g_tabix = g_tabix + 1.
+ ADD 1 TO tot-read.
+   CLEAR :messtab,
+        messtab[],
+        g_datefr,
+        g_dateto,
+        g_kbetr,
+        t_err.
+*perform open_group.
+*at FIRST.
+   CONDENSE t_indata-amount NO-GAPS.
+if g_tabix = 1.
+perform bdc_dynpro      using 'SAPMF05A'           '0100'.
+perform bdc_field       using 'BDC_CURSOR'         'RF05A-NEWKO'.
+perform bdc_field       using 'BDC_OKCODE'         '/00'.
+CONCATENATE       p_vfrom+6(2)
+                  '.'
+                  p_vfrom+4(2)
+                  '.'
+                  p_vfrom+0(4)
+                 INTO g_datefr.
+
+      CONCATENATE p_vato+6(2)
+                  '.'
+                  p_vato+4(2)
+                  '.'
+                  p_vato+0(4)
+                 INTO g_dateto.
+
+
+
+perform bdc_field       using 'BKPF-BLDAT'         g_datefr.
+perform bdc_field       using 'BKPF-BLART'         p_type.
+perform bdc_field       using 'BKPF-BUKRS'         p_com.
+perform bdc_field       using 'BKPF-BUDAT'         g_dateto.
+perform bdc_field       using 'BKPF-MONAT'         p_prd.
+perform bdc_field       using 'BKPF-WAERS'         p_curr.
+perform bdc_field       using 'FS006-DOCID'        '*'.
+*if g_tabix = 1.
+
+perform bdc_field       using 'RF05A-NEWBS'        t_indata-pskey.
+perform bdc_field       using 'RF05A-NEWKO'        t_indata-accno.
+
+perform bdc_dynpro      using 'SAPMF05A'           '0300'.
+perform bdc_field       using 'BDC_CURSOR'         'BSEG-WRBTR'.
+perform bdc_field       using 'BDC_OKCODE'         '=ZK'.
+perform bdc_field       using 'BSEG-WRBTR'         t_indata-amount."'769197.00'.
+perform bdc_field       using 'DKACB-FMORE'        'X'.
+
+perform bdc_dynpro      using 'SAPLKACB'           '0002'.
+perform bdc_field       using 'BDC_CURSOR'         'COBL-PRCTR'.
+perform bdc_field       using 'BDC_OKCODE'         '=ENTE'.
+perform bdc_field       using 'COBL-PRCTR'         t_indata-pcenter."'3112TU'.
+*ENDAT.
+endif.
+
+perform bdc_dynpro      using 'SAPMF05A'           '0330'.
+perform bdc_field       using 'BDC_CURSOR'         'RF05A-NEWKO'.
+perform bdc_field       using 'BDC_OKCODE'         '/00'.
+perform bdc_field       using 'RF05A-NEWBS'        t_indata-pskey."'50'.
+perform bdc_field       using 'RF05A-NEWKO'        t_indata-accno."'1021230'.
+
+perform bdc_dynpro      using 'SAPMF05A'           '0300'.
+perform bdc_field       using 'BDC_CURSOR'         'BSEG-WRBTR'.
+perform bdc_field       using 'BDC_OKCODE'         '=ZK'.
+perform bdc_field       using 'BSEG-WRBTR'         t_indata-amount."'10305705.00'.
+perform bdc_field       using 'DKACB-FMORE'        'X'.
+
+perform bdc_dynpro      using 'SAPLKACB'           '0002'.
+perform bdc_field       using 'BDC_CURSOR'         'COBL-PRCTR'.
+perform bdc_field       using 'BDC_OKCODE'         '=ENTE'.
+perform bdc_field       using 'COBL-PRCTR'         t_indata-pcenter."'3112TU'.
+
+*perform bdc_dynpro      using 'SAPMF05A'           '0330'.
+*perform bdc_field       using 'BDC_CURSOR'         'RF05A-NEWKO'.
+*perform bdc_field       using 'BDC_OKCODE'         '/00'.
+*perform bdc_field       using 'RF05A-NEWBS'        '40'.
+*perform bdc_field       using 'RF05A-NEWKO'        '1021301'.
+*
+*perform bdc_dynpro      using 'SAPMF05A'           '0300'.
+*perform bdc_field       using 'BDC_CURSOR'         'BSEG-WRBTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ZK'.
+*perform bdc_field       using 'BSEG-WRBTR'         '3222000.00'.
+*perform bdc_field       using 'DKACB-FMORE'        'X'.
+*
+*perform bdc_dynpro      using 'SAPLKACB'           '0002'.
+*perform bdc_field       using 'BDC_CURSOR'         'COBL-PRCTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ENTE'.
+*perform bdc_field       using 'COBL-PRCTR'         '3112TU'.
+*
+*perform bdc_dynpro      using 'SAPMF05A'           '0330'.
+*perform bdc_field       using 'BDC_CURSOR'         'RF05A-NEWKO'.
+*perform bdc_field       using 'BDC_OKCODE'         '/00'.
+*perform bdc_field       using 'RF05A-NEWBS'        '40'.
+*perform bdc_field       using 'RF05A-NEWKO'        '1021302'.
+*
+*perform bdc_dynpro      using 'SAPMF05A'           '0300'.
+*perform bdc_field       using 'BDC_CURSOR'         'BSEG-WRBTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ZK'.
+*perform bdc_field       using 'BSEG-WRBTR'         '4715000.00'.
+*perform bdc_field       using 'DKACB-FMORE'        'X'.
+*
+*perform bdc_dynpro      using 'SAPLKACB'           '0002'.
+*perform bdc_field       using 'BDC_CURSOR'         'COBL-PRCTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ENTE'.
+*perform bdc_field       using 'COBL-PRCTR'         '3112TU'.
+*
+*perform bdc_dynpro      using 'SAPMF05A'           '0330'.
+*perform bdc_field       using 'BDC_CURSOR'         'RF05A-NEWKO'.
+*perform bdc_field       using 'BDC_OKCODE'         '/00'.
+*perform bdc_field       using 'RF05A-NEWBS'        '40'.
+*perform bdc_field       using 'RF05A-NEWKO'        '1021303'.
+*
+*perform bdc_dynpro      using 'SAPMF05A'           '0300'.
+*perform bdc_field       using 'BDC_CURSOR'         'BSEG-WRBTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ZK'.
+*perform bdc_field       using 'BSEG-WRBTR'         '3137902.00'.
+*perform bdc_field       using 'DKACB-FMORE'        'X'.
+*
+*perform bdc_dynpro      using 'SAPLKACB'           '0002'.
+*perform bdc_field       using 'BDC_CURSOR'         'COBL-PRCTR'.
+*perform bdc_field       using 'BDC_OKCODE'         '=ENTE'.
+*perform bdc_field       using 'COBL-PRCTR'         '3112TU'.
+
+*if g_tabix = l_tabix.
+at LAST.
+perform bdc_dynpro      using 'SAPMF05A'           '0330'.
+perform bdc_field       using 'BDC_CURSOR'         'BSEG-CCBTC'.
+perform bdc_field       using 'BDC_OKCODE'         '=BU'.
+*perform bdc_transaction using 'FB01'.
+CALL TRANSACTION 'FB01' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+IF sy-subrc NE 0.
+      zzret_code = sy-subrc.
+*If error in upload move to session
+      IF v_open NE 'X'.
+        v_open = 'X'.
+        PERFORM bdc_open_group USING p_sess.
+      ENDIF.
+      PERFORM bdc_insert USING 'FB01'.
+    ELSE.
+      zzret_code = 0.
+    ENDIF.
+
+    READ TABLE messtab WITH  KEY msgtyp = 'E'.
+    IF sy-subrc =  0.
+      ADD 1 TO tot-err.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err .
+*Get the Error details
+      PERFORM format_message.
+      APPEND t_err.
+    ELSE.
+*      COMMIT WORK AND WAIT.
+*    ADD 1 TO tot-ok.
+**Success Message
+*    MOVE-CORRESPONDING t_indata TO t_err.
+**    READ TABLE messtab WITH  KEY msgtyp = 'S'.
+**    CONCATENATE messtab-msgv1 messtab-msgv2 messtab-msgv3 messtab-msgv4
+**               INTO t_err-desc .
+***    READ TABLE messtab WITH  KEY msgtyp = 'S'.
+***    t_err-kunnr = messtab-msgv1.
+*
+*    APPEND t_err.
+    ENDIF.
+    REFRESH bdcdata.
+   endat.
+  ENDLOOP.
+*perform close_group.
+
+ IF v_open = 'X'.
+    PERFORM bdc_close_group USING p_sess.
+  ENDIF.
+
+   WRITE: /01      text-001 ,
+          30        ':',
+          31      sy-repid,
+*          92      text-001,
+          92      sy-pagno,
+         /01      text-003,
+          10      'by',
+          30      ':',
+          31      sy-uname,
+          82      sy-datum DD/MM/YY,
+          92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  IF t_err[] IS NOT INITIAL.
+    WRITE: /01     text-005,
+            25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+    ULINE.
+    SKIP 2.
+  ENDIF.
+  tot-ok = tot-read - tot-err.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   28 tot-read.
+  WRITE: / 'TOTAL CUSTOMERS CREATED',    28 tot-ok.
+  WRITE: / 'TOTAL CUSTOMERS IN ERROR',   28 tot-err.
+
+  IF t_err[] IS NOT INITIAL.
+*Download error  files
+    PERFORM download_result.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Uploads the file from the workstation using the standard SAP
+*       function module WS_UPLOAD.
+*----------------------------------------------------------------------*
+FORM upload_file USING infile.
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+     i_line_header              = p_head
+      i_tab_raw_data             = it_raw
+      i_filename                 = p_upl
+    TABLES
+      i_tab_converted_data       = t_indata
+   EXCEPTIONS
+     conversion_failed          = 1
+     OTHERS                     = 2
+            .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                               " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+
+*  INSERT w_intial INTO t_err INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_err[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+    CONCATENATE t_err-desc
+                g_mess
+                ','
+                INTO t_err-desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE

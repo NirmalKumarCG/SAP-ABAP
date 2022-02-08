@@ -1,0 +1,1644 @@
+************************************************************************
+* The excise invoice printing program, the program drives the layout   *
+* set ( standard J_1I_EXC_INVOICE )                                    *
+* Author : Rajendra Salecha                                            *
+************************************************************************
+*----------------------------------------------------------------------*
+*              Print of an excise invoice by SAPscript                 *
+*----------------------------------------------------------------------*
+
+*----------------------------------------------------------------------*
+* Report       : Z_EXCISE_INVOICE                                      *
+* Version      : 1.0                                                   *
+* Application  : MM                                                    *
+* Date created : 04 MAR 2009                                           *
+* Description  : Print Program for Excise Invoice                      *
+*                                                                      *
+*----------------------------------------------------------------------*
+* Modification History                                                 *
+*----------------------------------------------------------------------*
+* Request no. |Date       |Programmer      | Description               *
+*----------------------------------------------------------------------*
+*             |02.02.2009 |Naveen K George |                           *
+*----------------------------------------------------------------------*
+* Upload File Format   = xls                                           *
+* Download File Format = xls                                           *
+*----------------------------------------------------------------------*
+
+REPORT z_exc_invoice LINE-COUNT 100 MESSAGE-ID 8i.
+
+TABLES : vbrk,
+         vbrp,
+         vbfa,
+         vbdkr,
+         t001, t005, j_1iexcdef,
+         t001w,
+         likp,
+         kuagv,
+         kuwev,
+         kna1,
+         thead,
+         vbak.
+
+TABLES : j_1iexchdr,
+         j_1iexcdtl,
+         j_1iwrkcus,
+         j_1iregset.
+
+INCLUDE rvadtabl.
+
+DATA : tvbdpr      LIKE vbdpr OCCURS 100 WITH HEADER LINE.
+DATA: BEGIN OF tj_1iexcdtl OCCURS 30.
+        INCLUDE STRUCTURE j_1iexcdtl.
+DATA: END OF tj_1iexcdtl.
+DATA: retcode   LIKE sy-subrc.         "Returncode
+DATA: repeat(1) TYPE c.
+DATA: xscreen(1) TYPE c.               "Output on printer or screen
+
+*--------------------------------------------------------------------*
+*  Changes in standard        "Data Declaration
+*--------------------------------------------------------------------*
+
+TABLES : lfa1,
+*         kna1,
+         j_1imocust,
+         j_1imovend,
+         j_1imocomp.
+
+DATA: addr_selection  LIKE addr1_sel.
+DATA : g_country(15),
+       g_sold_country(15),
+       g_ship_country(15).
+DATA : t_top_text TYPE TABLE OF vtopis WITH HEADER LINE,
+       w_text1 LIKE LINE OF t_top_text,
+       w_text2 LIKE LINE OF t_top_text.
+DATA : w_l_sadr LIKE sadr,
+       w_ship_sadr LIKE sadr,
+       w_sold_sadr LIKE sadr.
+DATA : BEGIN OF w_items,
+        t_qty LIKE j_1iexcdtl-menge,
+        t_uom LIKE j_1iexcdtl-meins,
+        t_rp(15),
+        t_ewrd(15),
+        t_ar(15),
+        t_cedp(15),
+       END OF w_items.
+DATA: g_vatno LIKE tvarvc-low,
+      g_docthru LIKE tvarvc-low,
+      g_bstkd LIKE vbkd-bstkd.
+DATA: g_txt(30).
+DATA: w_bapi_view LIKE order_view,
+      t_salesorder TYPE STANDARD TABLE OF sales_key WITH HEADER LINE,
+      t_order_conditions_out TYPE STANDARD TABLE OF bapisdcond WITH HEADER LINE,
+      t_order_cond_head TYPE STANDARD TABLE OF bapicondhd WITH HEADER LINE.
+DATA : BEGIN OF w_tax_det,
+        rate_price TYPE j_1iexcbas,
+        price      TYPE j_1iexcbas,
+        ex_wd      TYPE j_1iexcbas,
+        cess       TYPE j_1iexcbas,
+*        bed_per    TYPE j_1iexcbas,
+        aed        TYPE j_1iexcbas,
+*        aed_per    TYPE j_1iexcbas,
+        sed        TYPE j_1iexcbas,
+*        sed_per    TYPE j_1iexcbas,
+        ecess      TYPE j_1iexcbas,
+*        ecess_per  TYPE j_1iexcbas,
+        hsec       TYPE j_1iexcbas,
+*        hsec_per   TYPE j_1iexcbas,
+        rtrade_disc TYPE j_1iexcbas,
+        trade_disc TYPE j_1iexcbas,
+        ass_rate   TYPE j_1iexcbas,
+        ass_val    TYPE j_1iexcbas,
+        ced_rate   TYPE j_1iexcbas,
+        ced        TYPE j_1iexcbas,
+*        ced_per    TYPE j_1iexcbas,
+        rdnpl      TYPE j_1iexcbas,
+        dnpl       TYPE j_1iexcbas,
+        vat        TYPE j_1iexcbas,
+*        vat_per    TYPE j_1iexcbas,
+        octroi     TYPE j_1iexcbas,
+        vat_cess   TYPE j_1iexcbas,
+        add_tax    TYPE j_1iexcbas,
+       END OF w_tax_det.
+DATA :  g_ctot_qty(15),
+        g_ctot_rprice(15),
+        g_ctot_price(15),
+        g_ctot_bed(15),
+        g_ctot_cess(15),
+        g_ctot_aed(15),
+*        g_ctot_bed_per(15),
+        g_ctot_ass_rate(15),
+        g_ctot_ass_val(15),
+        g_ctot_ced_rate(15),
+        g_ctot_ced(15),
+        g_ctot_dnpl(15),
+        g_ctot_disc(15),
+*        g_ctot_ced_per(15),
+        g_ctax_amt(15),
+        g_ctot_vat(15),
+        g_ctotal(15),
+        g_ctot_sed(15),
+        g_ctot_ecess(15),
+        g_ctot_hsec(15),
+        g_ctot_octroi(15),
+        g_ctot_vat_cess(15),
+        g_ctot_add_tax(15).
+
+DATA :  g_tot_qty       TYPE j_1iexcdtl-menge,
+        g_tot_rprice    TYPE j_1iexcbas,
+        g_tot_price     TYPE j_1iexcbas,
+        g_tot_bed       TYPE j_1iexcbas,
+        g_tot_cess      TYPE j_1iexcbas,
+        g_tot_aed       TYPE j_1iexcbas,
+*        g_tot_bed_per   TYPE j_1iexcbas,
+        g_tot_ass_rate  TYPE j_1iexcbas,
+        g_tot_ass_val   TYPE j_1iexcbas,
+        g_tot_ced_rate  TYPE j_1iexcbas,
+        g_tot_ced       TYPE j_1iexcbas,
+        g_tot_dnpl      TYPE j_1iexcbas,
+        g_tot_disc      TYPE j_1iexcbas,
+*        g_tot_ced_per   TYPE j_1iexcbas,
+        g_tax_amt       TYPE j_1iexcbas,
+        g_tot_vat       TYPE j_1iexcbas,
+        g_total         TYPE j_1iexcbas,
+        g_tot_sed       TYPE j_1iexcbas,
+        g_tot_ecess     TYPE j_1iexcbas,
+        g_tot_hsec      TYPE j_1iexcbas,
+        g_tot_octroi    TYPE j_1iexcbas,
+        g_tot_vat_cess TYPE j_1iexcbas,
+        g_tot_add_tax TYPE j_1iexcbas.
+DATA: g_vat_per(20),
+      g_words(255),
+      g_w_tot_aval(255),
+      g_w_tot_bed(255),
+      g_w_tot_val(255),
+      g_pack_size(30),
+      g_transp_mode(40),
+      g_doc TYPE vbeln,
+      g_date LIKE sy-datum.
+*---------------------------------------------------------------------*
+*       FORM ENTRY                                                    *
+*---------------------------------------------------------------------*
+*  The function that is called for printing the excise invoice        *
+*---------------------------------------------------------------------*
+*  -->  RETURN_CODE                                                   *
+*  -->  US_SCREEN                                                     *
+*---------------------------------------------------------------------*
+
+FORM entry USING return_code us_screen.
+
+  CLEAR retcode.
+  xscreen = us_screen.
+  PERFORM processing USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+
+ENDFORM.                    "ENTRY
+
+*---------------------------------------------------------------------*
+*       FORM PROCESSING                                               *
+*---------------------------------------------------------------------*
+*  -->  PROC_SCREEN                                                   *
+*---------------------------------------------------------------------*
+
+FORM processing USING proc_screen.
+  DATA: l_cnt TYPE i.
+
+  PERFORM get_data.
+  CHECK retcode = 0.
+  DO 6 TIMES.
+    l_cnt = l_cnt + 1.
+    IF l_cnt = 1.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZORIGINAL_FB'
+                         AND type = 'S'.
+    ELSEIF l_cnt = 2.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZACCT_COPY'
+                         AND type = 'S'.
+    ELSEIF l_cnt = 3.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZEXT_COPY_TRAN'
+                         AND type = 'S'.
+    ELSEIF l_cnt = 4.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZT_ASS'
+                         AND type = 'S'.
+    ELSEIF l_cnt = 5.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZEXTRA_CPY'
+                         AND type = 'S'.
+    ELSEIF l_cnt = 6.
+      SELECT SINGLE low FROM tvarv
+                        INTO g_txt
+                       WHERE name = 'ZDUP_FOR_TRAN'
+                         AND type = 'S'.
+    ENDIF.
+    PERFORM form_open USING proc_screen vbdkr-land1.
+    CHECK retcode = 0.
+    PERFORM form_title_print.
+    CHECK retcode = 0.
+    PERFORM customer_address_print.
+    CHECK retcode = 0.
+    PERFORM header_data_print.
+    CHECK retcode = 0.
+    PERFORM text_before_item_print.
+    CHECK retcode = 0.
+    PERFORM item_print.
+    CHECK retcode = 0.
+    PERFORM text_after_item_print.
+    CHECK retcode = 0.
+    PERFORM end_print.
+    CHECK retcode = 0.
+    PERFORM form_close.
+    CHECK retcode = 0.
+  ENDDO.
+ENDFORM.                    "PROCESSING
+
+***********************************************************************
+*       S U B R O U T I N E S                                         *
+***********************************************************************
+*---------------------------------------------------------------------*
+*       FORM CHECK_REPEAT                                             *
+*---------------------------------------------------------------------*
+*       A text is printed, if it is a repeat print for the document.  *
+*---------------------------------------------------------------------*
+
+FORM check_repeat.
+
+  CLEAR repeat.
+  SELECT * INTO *nast FROM nast WHERE kappl = nast-kappl
+                                AND   objky = nast-objky
+                                AND   kschl = nast-kschl
+                                AND   spras = nast-spras
+                                AND   parnr = nast-parnr
+                                AND   parvw = nast-parvw
+                                AND   nacha BETWEEN '1' AND '4'.
+    CHECK *nast-vstat = '1'.
+    repeat = 'X'.
+    EXIT.
+  ENDSELECT.
+
+ENDFORM.                    "CHECK_REPEAT
+
+*---------------------------------------------------------------------*
+*       FORM END_PRINT                                                *
+*---------------------------------------------------------------------*
+*   Print the part2 entry number                                      *
+*---------------------------------------------------------------------*
+
+FORM end_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'SERIAL_NO_HDR'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+* print the RG23A/C part 2 and PLA entry number
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'SRNOS'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "END_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM FORM_CLOSE                                               *
+*---------------------------------------------------------------------*
+*       End of printing the form                                      *
+*---------------------------------------------------------------------*
+
+FORM form_close.
+
+  CALL FUNCTION 'CLOSE_FORM'
+    EXCEPTIONS
+      OTHERS = 1.
+  IF sy-subrc NE 0.
+    retcode = sy-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+  SET COUNTRY space.
+
+ENDFORM.                    "FORM_CLOSE
+
+*---------------------------------------------------------------------*
+*       FORM FORM_OPEN                                                *
+*---------------------------------------------------------------------*
+*       Start of printing the form                                    *
+*---------------------------------------------------------------------*
+*  -->  US_SCREEN  Output on screen                                   *
+*                  ' ' = Printer                                      *
+*                  'X' = Screen                                       *
+*  -->  US_COUNTRY County for telecommunication and SET COUNTRY       *
+*---------------------------------------------------------------------*
+
+FORM form_open USING us_screen us_country.
+
+  INCLUDE rvadopfo.
+
+ENDFORM.                    "FORM_OPEN
+
+*---------------------------------------------------------------------*
+*       FORM FORM_TITLE_PRINT                                         *
+*---------------------------------------------------------------------*
+*       Printing of the form title depending of the field VBTYP       *
+*---------------------------------------------------------------------*
+
+FORM form_title_print.
+
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'EXCISE_INV'
+      window  = 'TITLE'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+* print the export type if applicable
+  CASE j_1iexchdr-expind.
+    WHEN 'D'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element  = 'DEEMED_EXP'
+          window   = 'TITLE'
+          function = 'APPEND'
+        EXCEPTIONS
+          element  = 1
+          window   = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'B'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element  = 'EXP_BOND'
+          window   = 'TITLE'
+          function = 'APPEND'
+        EXCEPTIONS
+          element  = 1
+          window   = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'N'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element  = 'EXP_NOBOND'
+          window   = 'TITLE'
+          function = 'APPEND'
+        EXCEPTIONS
+          element  = 1
+          window   = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+  ENDCASE.
+
+
+* print REPRINT if already printed
+  IF repeat <> space.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element  = 'REPEAT'
+        window   = 'TITLE'
+        function = 'APPEND'
+      EXCEPTIONS
+        element  = 1
+        window   = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    "FORM_TITLE_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM GET_DATA                                                 *
+*---------------------------------------------------------------------*
+*       General provision of data for the form                        *
+*---------------------------------------------------------------------*
+
+FORM get_data.
+
+  PERFORM get_delivery_info.
+  PERFORM get_excise_invoice.
+  CHECK retcode = 0.
+  PERFORM get_sending_plant.
+* --------------changes frm std
+* PERFORM TO get shipto and soldto address
+  PERFORM get_ship_sold_add.
+*  perform to get vendor details
+  PERFORM get_vend_det.
+*  perform to get Transport details
+  PERFORM get_trans_det.
+* --------------changes frm std
+  PERFORM check_repeat.
+  PERFORM get_excise_details.
+  CHECK retcode = 0.
+
+ENDFORM.                    "GET_DATA
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_PRINT                                               *
+*---------------------------------------------------------------------*
+*       Printout of the items                                         *
+*---------------------------------------------------------------------*
+
+FORM item_print.
+  DATA : l_cnt TYPE i VALUE 1,
+         l_volum LIKE mara-volum,
+         l_voleh LIKE mara-voleh.
+  DATA : BEGIN OF w_pack,
+          menge(15),
+          volum(15),
+          voleh(15),
+         END OF w_pack.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DASH_LINE'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+* header line
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_HEADER'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DASH_LINE'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+  SORT tj_1iexcdtl BY zeile.
+*  Perform to get pricing details
+  PERFORM get_pricing_data.
+  LOOP AT tj_1iexcdtl INTO j_1iexcdtl.
+    IF j_1iexcdtl-zeile = l_cnt.
+* header line
+      IF l_cnt NE 1.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_HEADER1'
+          EXCEPTIONS
+            OTHERS  = 1.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+      l_cnt = l_cnt + 6.
+    ENDIF.
+    SELECT SINGLE volum voleh FROM mara
+                              INTO (l_volum , l_voleh)
+                             WHERE matnr = j_1iexcdtl-matnr.
+    IF sy-subrc = 0.
+      DATA: l_menge1(3),
+            l_menge2(15),
+            l_menge(15).
+      l_menge   = j_1iexcdtl-menge.
+      l_menge2  = j_1iexcdtl-menge.
+      CONDENSE l_menge NO-GAPS.
+      CONDENSE l_menge2 NO-GAPS.
+      SPLIT l_menge2 AT '.' INTO l_menge2 l_menge1.
+      IF l_menge1 CO ' 0'.
+        SPLIT l_menge AT '.' INTO l_menge l_menge1.
+      ENDIF.
+      CONDENSE l_menge NO-GAPS.
+      CONDENSE l_menge2 NO-GAPS.
+      w_pack-voleh = l_voleh.
+      w_pack-menge = l_menge.
+      CLEAR l_menge1.
+      CONDENSE l_menge NO-GAPS.
+      CONDENSE l_menge2 NO-GAPS.
+      w_pack-volum = l_volum.
+      l_menge   = w_pack-volum.
+      l_menge2  = w_pack-volum.
+      CONDENSE l_menge NO-GAPS.
+      CONDENSE l_menge2 NO-GAPS.
+      SPLIT l_menge2 AT '.' INTO l_menge2 l_menge1.
+      IF l_menge1 CO ' 0'.
+        SPLIT l_menge AT '.' INTO l_menge l_menge1.
+      ENDIF.
+      w_pack-volum = l_menge.
+      CONDENSE w_pack-volum NO-GAPS.
+      CONDENSE w_pack-voleh NO-GAPS.
+      CONDENSE w_pack-menge NO-GAPS.
+      CONCATENATE w_pack-volum
+                  w_pack-voleh
+             INTO g_pack_size.
+      CONCATENATE w_pack-menge 'X'
+                  '1' 'X'
+                  g_pack_size
+             INTO g_pack_size
+        SEPARATED BY space.
+    ENDIF.
+    DATA : l_qty LIKE j_1iexcdtl-menge.
+    IF vbrk-zuonr IS NOT INITIAL.
+      SELECT SINGLE kwmeng FROM vbap
+                           INTO l_qty
+                          WHERE vbeln = vbrk-zuonr
+                            AND posnr = j_1iexcdtl-ritem1.
+    ENDIF.
+    LOOP AT t_order_conditions_out WHERE itm_number = j_1iexcdtl-ritem1
+                                     AND cond_type  IS NOT INITIAL.
+      CASE t_order_conditions_out-cond_type.
+*        WHEN 'ZPR0'.  "RateProce
+*          w_tax_det-rate_price = t_order_conditions_out-cond_value.
+*          w_tax_det-price      = t_order_conditions_out-condvalue.
+*          g_tot_rprice = g_tot_rprice + w_tax_det-rate_price.
+*          g_tot_price  = g_tot_price  + w_tax_det-price.
+*          MOVE g_tot_rprice TO g_ctot_rprice.
+*          IF g_tot_price IS NOT INITIAL.
+*            MOVE g_tot_price TO g_ctot_price.
+*          ENDIF.
+*        WHEN 'JEXP'.  "BED Basic Excise Warehouse Rate Duty
+*          w_tax_det-ced_rate   = t_order_conditions_out-condvalue / l_qty. "j_1iexcdtl-menge .
+*          w_tax_det-ced        = w_tax_det-ced_rate * j_1iexcdtl-menge.    "t_order_conditions_out-condvalue.
+*          g_tot_ced_rate = g_tot_ced_rate + w_tax_det-ced_rate.
+*          g_tot_ced      = g_tot_ced + w_tax_det-ced.
+*          MOVE g_tot_ced_rate TO g_ctot_ced_rate.
+*          IF g_tot_ced_rate IS NOT INITIAL.
+*            MOVE g_tot_ced TO g_ctot_ced.
+*          ENDIF.
+*        WHEN 'JEAP'.  "AED Additional Excise Duty
+**          w_tax_det-aed        = t_order_conditions_out-condvalue.
+*           w_tax_det-aed        = t_order_conditions_out-condvalue / l_qty.
+*           w_tax_det-aed        = w_tax_det-aed * j_1iexcdtl-menge.
+*          g_tot_aed      = g_tot_aed + w_tax_det-aed.
+*          IF g_tot_aed IS NOT INITIAL.
+*            MOVE g_tot_aed TO g_ctot_aed.
+*          ENDIF.
+*        WHEN 'JCEP'.  "Cess
+**          w_tax_det-cess        = t_order_conditions_out-condvalue.
+*          w_tax_det-cess        = t_order_conditions_out-condvalue / l_qty.
+*          w_tax_det-cess        = w_tax_det-cess * j_1iexcdtl-menge.
+*          g_tot_cess      = g_tot_cess + w_tax_det-cess.
+*          IF g_tot_cess IS NOT INITIAL.
+*            MOVE g_tot_cess TO g_ctot_cess.
+*          ENDIF.
+*        WHEN 'JESP'.  "SED Sec Excise Duty
+**          w_tax_det-sed        = t_order_conditions_out-condvalue.
+*          w_tax_det-sed        = t_order_conditions_out-condvalue / l_qty.
+*          w_tax_det-sed        = w_tax_det-sed * j_1iexcdtl-menge.
+*          g_tot_sed   = g_tot_sed + w_tax_det-sed.
+*          IF g_tot_sed IS NOT INITIAL.
+*            MOVE g_tot_sed TO g_ctot_sed.
+*          ENDIF.
+*        WHEN 'JECS'.  "Edu. Cess
+**          w_tax_det-ecess      = t_order_conditions_out-condvalue.
+*          w_tax_det-ecess      = t_order_conditions_out-condvalue / l_qty.
+*          w_tax_det-ecess      = w_tax_det-ecess * j_1iexcdtl-menge.
+*          g_tot_ecess          = g_tot_ecess + w_tax_det-ecess.
+*          IF g_tot_ecess IS NOT INITIAL.
+*            MOVE g_tot_ecess TO g_ctot_ecess.
+*          ENDIF.
+*        WHEN 'JHCS'.  "HSE Cess
+**          w_tax_det-hsec       = t_order_conditions_out-condvalue.
+*          w_tax_det-hsec       = t_order_conditions_out-condvalue / l_qty.
+*          w_tax_det-hsec       = w_tax_det-hsec *  j_1iexcdtl-menge.
+*          g_tot_hsec    = g_tot_hsec + w_tax_det-hsec.
+*          IF g_tot_hsec IS NOT INITIAL.
+*            MOVE g_tot_hsec TO g_ctot_hsec.
+*          ENDIF.
+*        WHEN 'Z001'.  "Trade Discount (Z001 - Z280)
+*          w_tax_det-trade_disc  = t_order_conditions_out-condvalue.
+*          w_tax_det-rtrade_disc = t_order_conditions_out-cond_value.
+*        WHEN 'Z280'.  "Trade Discount (Z001 - Z280)
+*          w_tax_det-trade_disc = t_order_conditions_out-condvalue.
+        WHEN 'J1AU'.  "Add: VAT/CST
+*          w_tax_det-vat       = t_order_conditions_out-condvalue.
+          w_tax_det-vat       = t_order_conditions_out-condvalue / l_qty.
+          w_tax_det-vat       = w_tax_det-vat * j_1iexcdtl-menge.
+          g_tot_vat           = g_tot_vat + w_tax_det-vat.
+          IF g_tot_vat IS NOT INITIAL.
+            MOVE g_tot_vat TO g_ctot_vat.
+          ENDIF.
+        WHEN 'JOC1'.   "Octroi
+*          w_tax_det-octroi    = t_order_conditions_out-condvalue.
+          w_tax_det-octroi    = t_order_conditions_out-condvalue / l_qty.
+          w_tax_det-octroi    = w_tax_det-octroi * j_1iexcdtl-menge.
+          g_tot_octroi        = g_tot_octroi + w_tax_det-octroi.
+          IF g_tot_octroi IS NOT INITIAL.
+            MOVE g_tot_octroi TO g_ctot_octroi.
+          ENDIF.
+        WHEN 'J1AC'.    "VAT Cess
+*          w_tax_det-vat_cess  = t_order_conditions_out-condvalue.
+          w_tax_det-vat_cess  = t_order_conditions_out-condvalue / l_qty.
+          w_tax_det-vat_cess  = w_tax_det-vat_cess * j_1iexcdtl-menge.
+          g_tot_vat_cess      = g_tot_vat_cess + w_tax_det-vat_cess.
+          IF g_tot_vat_cess IS NOT INITIAL.
+            MOVE g_tot_vat_cess TO g_ctot_vat_cess.
+          ENDIF.
+        WHEN 'J1AD'.    "Add Tax
+*          w_tax_det-add_tax  = t_order_conditions_out-condvalue.
+          w_tax_det-add_tax  = t_order_conditions_out-condvalue / l_qty.
+          w_tax_det-add_tax  = w_tax_det-add_tax * j_1iexcdtl-menge.
+          g_tot_add_tax      = g_tot_add_tax + w_tax_det-add_tax.
+          IF g_tot_add_tax IS NOT INITIAL.
+            MOVE g_tot_add_tax TO g_ctot_add_tax.
+          ENDIF.
+*        WHEN 'ZM70'.    "Ass Rate / Value
+**          w_tax_det-ass_val   = t_order_conditions_out-condvalue.
+**          w_tax_det-ass_rate  = w_tax_det-ass_val / j_1iexcdtl-menge.
+*          w_tax_det-ass_rate  = t_order_conditions_out-condvalue / l_qty.
+*          w_tax_det-ass_val   = w_tax_det-ass_rate * j_1iexcdtl-menge.
+*          g_tot_ass_val       = g_tot_ass_val + w_tax_det-ass_val.
+*        WHEN 'ZDNP'.    "Dealer Net Price
+**          w_tax_det-dnpl    = t_order_conditions_out-condvalue.
+**          w_tax_det-rdnpl   = t_order_conditions_out-cond_value.
+*          w_tax_det-rdnpl   = t_order_conditions_out-cond_value.
+*          w_tax_det-dnpl    = w_tax_det-rdnpl * j_1iexcdtl-menge.
+*          g_tot_dnpl        = g_tot_dnpl + w_tax_det-dnpl.
+      ENDCASE.
+    ENDLOOP.
+    IF vbrk-fkart = 'F2'.
+      SELECT SINGLE kzwi1 FROM vbrp
+                          INTO w_tax_det-dnpl
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-ritem1.
+      IF sy-subrc = 0.
+        w_tax_det-rdnpl   = w_tax_det-dnpl / j_1iexcdtl-menge.
+        g_tot_dnpl        = g_tot_dnpl + w_tax_det-dnpl.
+      ENDIF.
+    ELSEIF vbrk-fkart = 'JEX'.
+      SELECT SINGLE kzwi1 FROM vbrp
+                          INTO w_tax_det-dnpl
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-zeile.
+      IF sy-subrc = 0.
+        w_tax_det-rdnpl   = w_tax_det-dnpl / j_1iexcdtl-menge.
+        g_tot_dnpl        = g_tot_dnpl + w_tax_det-dnpl.
+      ENDIF.
+    ENDIF.
+    IF vbrk-fkart = 'F2'.
+      SELECT SINGLE kzwi4 FROM vbrp
+                          INTO w_tax_det-ass_val
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-ritem1.
+      IF sy-subrc = 0.
+        w_tax_det-ass_rate  = w_tax_det-ass_val / j_1iexcdtl-menge.
+        g_tot_ass_val       = g_tot_ass_val + w_tax_det-ass_val.
+      ENDIF.
+    ELSEIF vbrk-fkart = 'JEX'.
+      SELECT SINGLE kzwi4 FROM vbrp
+                          INTO w_tax_det-ass_val
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-zeile.
+      IF sy-subrc = 0.
+        w_tax_det-ass_rate  = w_tax_det-ass_val / j_1iexcdtl-menge.
+        g_tot_ass_val       = g_tot_ass_val + w_tax_det-ass_val.
+      ENDIF.
+    ENDIF.
+    w_tax_det-ced_rate     = j_1iexcdtl-exbed / j_1iexcdtl-menge .
+*    g_tot_ced         = g_tot_ced + w_tax_det-ced.
+*    IF g_tot_ced IS NOT INITIAL.
+*      MOVE g_tot_ced TO g_ctot_ced.
+*    ENDIF.
+*    w_tax_det-aed     = j_1iexcdtl-exaed.
+*    g_tot_aed         = g_tot_aed + w_tax_det-aed.
+*    IF g_tot_aed IS NOT INITIAL.
+*      MOVE g_tot_aed TO g_ctot_aed.
+*    ENDIF.
+*    w_tax_det-cess    = j_1iexcdtl-cess.
+*    g_tot_cess        = g_tot_cess + w_tax_det-cess.
+*    IF g_tot_cess IS NOT INITIAL.
+*      MOVE g_tot_cess TO g_ctot_cess.
+*    ENDIF.
+*    w_tax_det-sed        = j_1iexcdtl-exsed.
+*    g_tot_sed   = g_tot_sed + w_tax_det-sed.
+*    IF g_tot_sed IS NOT INITIAL.
+*      MOVE g_tot_sed TO g_ctot_sed.
+*    ENDIF.
+*    w_tax_det-ecess      = j_1iexcdtl-ecs.
+*    g_tot_ecess          = g_tot_ecess + w_tax_det-ecess.
+*    IF g_tot_ecess IS NOT INITIAL.
+*      MOVE g_tot_ecess TO g_ctot_ecess.
+*    ENDIF.
+*    w_tax_det-hsec       = j_1iexcdtl-addat1.
+*    g_tot_hsec    = g_tot_hsec + w_tax_det-hsec.
+*    IF g_tot_hsec IS NOT INITIAL.
+*      MOVE g_tot_hsec TO g_ctot_hsec.
+*    ENDIF.
+    IF vbrk-fkart = 'F2'.
+      SELECT SINGLE kzwi2 FROM vbrp
+                          INTO w_tax_det-trade_disc
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-ritem1.
+      w_tax_det-rtrade_disc = w_tax_det-trade_disc / j_1iexcdtl-menge.
+      g_tot_disc            = g_tot_disc + w_tax_det-trade_disc.
+    ELSEIF vbrk-fkart = 'JEX'.
+      SELECT SINGLE kzwi2 FROM vbrp
+                          INTO w_tax_det-trade_disc
+                         WHERE vbeln = vbrk-vbeln
+                           AND posnr = j_1iexcdtl-zeile.
+      w_tax_det-rtrade_disc = w_tax_det-trade_disc / j_1iexcdtl-menge.
+      g_tot_disc            = g_tot_disc + w_tax_det-trade_disc.
+    ENDIF.
+*      w_tax_det-ass_rate  = "w_tax_det-rate_price + w_tax_det-rtrade_disc.
+*      w_tax_det-ass_val   = "w_tax_det-price + w_tax_det-trade_disc.
+    w_tax_det-ex_wd     = '0.0'.
+* write the item details
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'ITEM_VALUES'
+      EXCEPTIONS
+        OTHERS  = 1.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+    g_tot_qty = g_tot_qty + j_1iexcdtl-menge.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+*          element = 'PAGE_NO'
+        window  = 'PAGE'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+    AT LAST.
+      g_ctot_bed    = j_1iexchdr-exbed.
+      g_ctot_cess   = j_1iexchdr-cess.
+      g_ctot_aed    = j_1iexchdr-exaed.
+      g_ctot_sed    = j_1iexchdr-exsed.
+      g_ctot_ecess  = j_1iexchdr-ecs.
+      g_ctot_hsec   = j_1iexchdr-exaddtax1.
+      if g_ctot_bed co '0. '.
+        clear g_ctot_bed.
+      endif.
+      if g_ctot_cess co '0. '.
+        clear g_ctot_cess.
+      endif.
+      if g_ctot_aed co '0. '.
+        clear g_ctot_aed.
+      endif.
+      if g_ctot_sed co '0. '.
+        clear g_ctot_sed.
+      endif.
+      if g_ctot_ecess co '0. '.
+        clear g_ctot_ecess.
+      endif.
+      if g_ctot_hsec co '0. '.
+        clear g_ctot_hsec.
+      endif.
+      MOVE g_tot_qty TO g_ctot_qty.
+      DATA: l_dummy(3),
+            l_ctot_qty(15).
+      SPLIT g_ctot_qty AT '.' INTO l_ctot_qty l_dummy.
+      IF l_dummy CO ' 0'.
+        SPLIT g_ctot_qty AT '.' INTO g_ctot_qty l_dummy.
+      ENDIF.
+*      g_tax_amt = g_tot_ass_val + g_tot_bed + g_tot_aed + g_tot_sed + g_tot_ced + g_tot_cess + g_tot_ecess + g_tot_hsec + g_tot_octroi + g_tot_vat_cess + g_tot_add_tax.
+*      IF g_tax_amt IS NOT INITIAL.
+*        MOVE g_tax_amt TO g_ctax_amt.
+*      ENDIF.
+      g_tax_amt = g_tot_dnpl + g_tot_disc.
+      IF g_tax_amt IS NOT INITIAL.
+        MOVE g_tax_amt TO g_ctax_amt.
+      ENDIF.
+      IF g_tot_disc IS NOT INITIAL.
+        MOVE g_tot_disc TO g_ctot_disc.
+      ENDIF.
+      g_total   = g_tax_amt + g_tot_vat + g_tot_add_tax + g_tot_vat_cess + g_tot_octroi.
+      IF g_total IS NOT INITIAL.
+        MOVE g_total TO g_ctotal.
+      ENDIF.
+      IF g_tot_ass_val IS NOT INITIAL.
+        MOVE g_tot_ass_val TO g_ctot_ass_val.
+      ENDIF.
+      IF g_tot_dnpl IS NOT INITIAL.
+        MOVE g_tot_dnpl TO g_ctot_dnpl.
+      ENDIF.
+      PERFORM amt_words USING    g_tot_dnpl
+                        CHANGING g_words.
+      CONCATENATE g_words 'only'
+             INTO g_w_tot_aval
+     SEPARATED BY space.
+      PERFORM amt_words USING    j_1iexchdr-exbed
+                        CHANGING g_words.
+      CONCATENATE g_words 'only'
+             INTO g_w_tot_bed
+     SEPARATED BY space.
+      PERFORM amt_words USING    g_ctotal
+                        CHANGING g_words.
+      CONCATENATE g_words 'only'
+             INTO g_w_tot_val
+     SEPARATED BY space.
+
+      SELECT SINGLE low FROM tvarv
+                        INTO g_vat_per
+                       WHERE name = 'ZSALES_VAT'
+                         AND type = 'S'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          window  = 'SUB_TOT'
+          element = 'TOTALS'
+        EXCEPTIONS
+          OTHERS  = 1.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'AMOUNT_WRDS'
+          window  = 'AMT_WRDS'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TOTAL'
+          window  = 'TOTAL'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TAX1'
+          window  = 'TOTAL'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TOTAMT'
+          window  = 'TOT_AMT'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'G_TOT'
+          window  = 'G_TOT'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'PAGE_NO'
+          window  = 'FOOTER'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ENDAT.
+***
+    CLEAR w_tax_det.
+***
+  ENDLOOP.
+***
+  CLEAR : g_tot_qty,
+          g_tot_rprice,
+          g_tot_price ,
+          g_tot_bed,
+          g_tot_cess,
+          g_tot_aed,
+*        g_tot_bed_per,
+          g_tot_ass_rate,
+          g_tot_ass_val,
+          g_tot_ced_rate,
+          g_tot_ced,
+*        g_tot_ced_per,
+          g_tax_amt,
+          g_tot_disc,
+          g_tot_vat,
+          g_total,
+          g_tot_dnpl,
+          g_tot_sed,
+          g_tot_ecess,
+          g_tot_hsec,
+          g_tot_octroi,
+          g_tot_vat_cess,
+          g_tot_add_tax.
+***
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DASH_LINE'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DASH_LINE'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'SPACE_LINE'
+    EXCEPTIONS
+      OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "ITEM_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM PROTOCOL_UPDATE                                          *
+*---------------------------------------------------------------------*
+*       The messages are collected for the processing protocol.       *
+*---------------------------------------------------------------------*
+
+FORM protocol_update.
+
+  CHECK xscreen = space.
+  CALL FUNCTION 'NAST_PROTOCOL_UPDATE'
+    EXPORTING
+      msg_arbgb = syst-msgid
+      msg_nr    = syst-msgno
+      msg_ty    = syst-msgty
+      msg_v1    = syst-msgv1
+      msg_v2    = syst-msgv2
+      msg_v3    = syst-msgv3
+      msg_v4    = syst-msgv4
+    EXCEPTIONS
+      OTHERS    = 1.
+
+ENDFORM.                    "PROTOCOL_UPDATE
+
+*----------------------------------------------------------------------*
+*       FORM GET_SENDING_PLANT
+*---------------------------------------------------------------------*
+*    This routine determines the address of the plant from where
+*    excise invoice is printed
+*---------------------------------------------------------------------*
+
+FORM get_sending_plant.
+  CLEAR: t001w,j_1iwrkcus,j_1iregset.
+  SELECT SINGLE * FROM  t001w
+        WHERE  werks       = j_1iexchdr-werks.
+  "--Start Mod frm Std
+  PERFORM get_logo_add.
+  "--End Mod frm Std
+  SELECT SINGLE * FROM j_1iwrkcus
+        WHERE  j_1iwerks   = j_1iexchdr-werks.
+  IF sy-subrc <> 0.
+* plant cutomisation not found
+    syst-msgid = '8I'.
+    syst-msgno = 303.
+    syst-msgty = 'E'.
+    CLEAR: syst-msgv4.
+    syst-msgv1 = 'plant'.
+    syst-msgv2 = j_1iexchdr-werks.
+    syst-msgv3 = 'J_1IWRKCUS'.
+    PERFORM protocol_update.
+    retcode = 4.
+    EXIT.
+  ENDIF.
+  SELECT SINGLE * FROM j_1iregset
+        WHERE  j_1iregid   = j_1iwrkcus-j_1iregid.
+  IF sy-subrc <> 0.
+* register id  cutomisation not found
+    syst-msgid = '8I'.
+    syst-msgno = 303.
+    syst-msgty = 'E'.
+    CLEAR: syst-msgv4.
+    syst-msgv1 = 'register id'.
+    syst-msgv2 = j_1iwrkcus-j_1iregid.
+    syst-msgv3 = 'J_1IREGSET'.
+    PERFORM protocol_update.
+    retcode = 4.
+  ENDIF.
+
+ENDFORM.                    "GET_SENDING_PLANT
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_EXCISE_DETAILS
+*&---------------------------------------------------------------------*
+* Get the excise details
+*----------------------------------------------------------------------*
+
+FORM get_excise_details.
+  DATA: kawrt LIKE komv-kawrt.
+  SELECT * FROM j_1iexcdtl INTO TABLE tj_1iexcdtl
+     WHERE trntyp   = j_1iexchdr-trntyp
+     AND   docyr    = j_1iexchdr-docyr
+     AND   docno    = j_1iexchdr-docno.
+  SELECT SINGLE * FROM t001 WHERE bukrs = j_1iexchdr-bukrs.
+*  SELECT SINGLE * FROM T005 WHERE LAND1 = T005-LAND1.
+  SELECT SINGLE * FROM t005 WHERE land1 = t001-land1.
+  SELECT SINGLE * FROM j_1iexcdef WHERE j_1itaxcal = t005-kalsm.
+  LOOP AT tj_1iexcdtl INTO tj_1iexcdtl.
+    IF tj_1iexcdtl-exbed IS INITIAL AND j_1iexchdr-expind = 'D'.
+      kawrt = tj_1iexcdtl-exbas.
+      CALL FUNCTION 'J_1I6_DETERMINE_EXCISE_RATE'
+        EXPORTING
+          bukrs                  = j_1iexchdr-bukrs
+          werks                  = j_1iexchdr-werks
+          matnr                  = tj_1iexcdtl-matnr
+          vendor                 = j_1iexchdr-kunag
+          kalsm                  = t005-kalsm
+          mwskz                  = j_1iexcdef-j_1itxcode
+          tax_date               = sy-datum
+          menge                  = tj_1iexcdtl-menge
+          kawrt                  = kawrt
+          unit                   = tj_1iexcdtl-meins
+        IMPORTING
+          exc_amount             = tj_1iexcdtl-exbed
+          exc_perc               = tj_1iexcdtl-bedrate
+          add_amount             = tj_1iexcdtl-exaed
+          add_perc               = tj_1iexcdtl-aedrate
+          sed_amount             = tj_1iexcdtl-exsed
+          sed_perc               = tj_1iexcdtl-sedrate
+        EXCEPTIONS
+          chapter_id_missing     = 1
+          company_data_not_setup = 2
+          tax_proc_invalid       = 3
+          excind_missing         = 4
+          vendor_missing         = 5
+          taxcode_invalid        = 6
+          excise_rate_missing    = 7
+          OTHERS                 = 8.
+
+    ENDIF.
+    IF sy-subrc EQ 0.
+      MODIFY tj_1iexcdtl.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                               " GET_EXCISE_DETAILS
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_EXCISE_INVOICE
+*&---------------------------------------------------------------------*
+*  get the excise invoice number                                       *
+*----------------------------------------------------------------------*
+
+FORM get_excise_invoice.
+
+* get the excise invoice for the refrence document
+  SELECT SINGLE * FROM j_1iexchdr
+     WHERE trntyp = 'DLFC'
+     AND   rdoc   = nast-objky(10)
+     AND   rind   = 'N'
+     AND   status = 'C'.
+  IF sy-subrc <> 0.
+* excise invoice not found
+    syst-msgid = '8I'.
+    syst-msgno = 301.
+    syst-msgty = 'E'.
+    CLEAR : syst-msgv1,
+            syst-msgv2,
+            syst-msgv3,
+            syst-msgv4.
+    PERFORM protocol_update.
+    retcode = 4.
+  ENDIF.
+
+  CLEAR: kuagv, kuwev.
+**  Below is way to fetch Sold to party and ship to party that was followed in standard prog
+**  comment below if the standard logic is needed
+** get the ship-to-party
+*  SELECT SINGLE * FROM kna1 INTO CORRESPONDING FIELDS OF kuwev
+*      WHERE kunnr = j_1iexchdr-kunwe.
+
+** get the sold-to-party
+*  IF j_1iexchdr-kunag IS INITIAL
+*     OR j_1iexchdr-kunag = j_1iexchdr-kunwe.
+*    MOVE-CORRESPONDING kuwev TO kuagv.
+*  ELSE.
+*    SELECT SINGLE * FROM kna1 INTO CORRESPONDING FIELDS OF kuagv
+*       WHERE kunnr = j_1iexchdr-kunag.
+*  ENDIF.
+
+ENDFORM.                               " GET_EXCISE_INVOICE
+
+*&---------------------------------------------------------------------*
+*&      Form  CUSTOMER_ADDRESS_PRINT
+*&---------------------------------------------------------------------*
+* Print the customer address                                           *
+*----------------------------------------------------------------------*
+
+FORM customer_address_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'LOGO'
+      window  = 'LOGO_ADD'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ADDRESSEE'
+      window  = 'SHIP_ADD'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'VENDOR_ADDR'
+      window  = 'ADDRESS'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " CUSTOMER_ADDRESS_PRINT
+
+*&---------------------------------------------------------------------*
+*&      Form  HEADER_DATA_PRINT
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+
+FORM header_data_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'HEADER_DATA'
+      window  = 'INFO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " HEADER_DATA_PRINT
+
+*&---------------------------------------------------------------------*
+*&      Form  GET_DELIVERY_INFO
+*&---------------------------------------------------------------------*
+*  Read the delivery information                                       *
+*----------------------------------------------------------------------*
+
+FORM get_delivery_info.
+  CLEAR thead.
+  thead-tdobject = 'J1II'.
+  CONCATENATE sy-mandt nast-objky(10) INTO thead-tdname.
+  thead-tdspras  = sy-langu.
+
+
+  vbdkr-land1 = 'IN'.
+  CLEAR : vbrk, vbrp, vbfa, likp.
+* read refrence document header type
+  SELECT SINGLE vbeln vbtyp
+      FROM vbrk
+      INTO (vbrk-vbeln,vbrk-vbtyp)
+      WHERE vbeln  = nast-objky(10).
+* read a refrence document item
+  SELECT SINGLE posnr vgbel
+     FROM  vbrp
+     INTO  (vbrp-posnr,vbrp-vgbel)
+     WHERE vbeln = vbrk-vbeln
+     AND vgtyp = 'J'.
+* get the delivery number
+  SELECT SINGLE *
+      FROM  vbfa
+      WHERE vbelv    = vbrp-vgbel
+     AND    vbeln    = vbrk-vbeln
+     AND    posnn    = vbrp-posnr
+     AND    vbtyp_n  = vbrk-vbtyp
+     AND    vbtyp_v  = 'J'.
+  IF sy-subrc =  0.
+* read the delivery header
+    SELECT SINGLE * FROM  likp
+         WHERE  vbeln = vbfa-vbelv.
+
+  ENDIF.
+  IF sy-subrc <> 0.
+* delivery not found
+    syst-msgid = '8I'.
+    syst-msgno = 301.
+    syst-msgty = 'E'.
+    CLEAR : syst-msgv1,
+            syst-msgv2,
+            syst-msgv3,
+            syst-msgv4.
+    PERFORM protocol_update.
+    retcode = 4.
+  ENDIF.
+
+
+ENDFORM.                               " GET_DELIVERY_INFO
+*&---------------------------------------------------------------------*
+*&      Form  TEXT_BEFORE_ITEM_PRINT
+*&---------------------------------------------------------------------*
+* Print the header text before the items are printed                  *
+*----------------------------------------------------------------------*
+FORM text_before_item_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'HEADER_TEXT_BEFORE_ITEMS'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " TEXT_BEFORE_ITEM_PRINT
+
+*&---------------------------------------------------------------------*
+*&      Form  TEXT_AFTER_ITEM_PRINT
+*&---------------------------------------------------------------------*
+* Print the header text before the items are printed                  *
+*----------------------------------------------------------------------*
+
+FORM text_after_item_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'HEADER_TEXT_AFTER_ITEMS'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " TEXT_AFTER_ITEM_PRINT
+*&---------------------------------------------------------------------*
+*&      Form  GET_LOGO_ADD
+*&---------------------------------------------------------------------*
+*       Get Address based on plant to display below logo
+*----------------------------------------------------------------------*
+FORM get_logo_add .
+  DATA: l_txt(20),
+        l_date1(10),
+        l_date2.
+  SELECT SINGLE * FROM vbrk
+                  WHERE vbeln = vbrk-vbeln.
+  CLEAR: w_l_sadr,
+         addr_selection,
+         g_country,
+         w_text1,
+         w_text2,
+         t_top_text,
+         t_top_text[].
+  addr_selection-addrnumber = t001w-adrnr.
+  CALL FUNCTION 'ADDR_GET'
+    EXPORTING
+      address_selection = addr_selection
+    IMPORTING
+      sadr              = w_l_sadr
+    EXCEPTIONS
+      parameter_error   = 1
+      address_not_exist = 2
+      version_not_exist = 3
+      internal_error    = 4
+      OTHERS            = 5.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSEIF sy-subrc = 0.
+    SELECT SINGLE landx FROM t005t
+                        INTO g_country
+                       WHERE land1 = w_l_sadr-land1
+                         AND spras = 'EN'.
+  ENDIF.
+  CALL FUNCTION 'SD_PRINT_TERMS_OF_PAYMENT'
+    EXPORTING
+     bldat                              = vbrk-erdat
+     budat                              = vbrk-fkdat
+     cpudt                              = vbrk-erdat
+     language                           = ' '
+      terms_of_payment                   = vbrk-zterm
+*   COUNTRY                            = ' '
+*   HOLDBACK                           = ' '
+*   TOP_HOLDBACK_INFO                  =
+*   DOCUMENT_CURRENCY                  = ' '
+* IMPORTING
+*   BASELINE_DATE                      =
+*   PAYMENT_SPLIT                      =
+*   ZFBDT                              =
+    TABLES
+      top_text                           = t_top_text
+* EXCEPTIONS
+*   TERMS_OF_PAYMENT_NOT_IN_T052       = 1
+*   OTHERS                             = 2
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+  READ TABLE t_top_text INDEX 1.
+  IF sy-subrc = 0.
+    l_txt = t_top_text-prz.
+    SPLIT l_txt AT '.' INTO l_txt w_text1-line.
+    CONDENSE l_txt NO-GAPS.
+    CONCATENATE l_txt
+                '%'
+           INTO l_txt.
+    CONCATENATE t_top_text-hdatum+6(2)
+                '.'
+                t_top_text-hdatum+4(2)
+                '.'
+                t_top_text-hdatum+0(4)
+          INTO  l_date1.
+    CONCATENATE 'Upto '
+                l_date1
+                l_txt
+                'discount'
+           INTO w_text1-line
+   SEPARATED BY space.
+  ENDIF.
+  READ TABLE t_top_text INDEX 2.
+  IF sy-subrc = 0.
+    CONDENSE l_txt NO-GAPS.
+    CONCATENATE t_top_text-hdatum+6(2)
+                '.'
+                t_top_text-hdatum+4(2)
+                '.'
+                t_top_text-hdatum+0(4)
+          INTO  l_date1.
+    CONCATENATE 'Upto '
+                l_date1
+                'without discount'
+           INTO w_text2-line
+   SEPARATED BY space.
+  ENDIF.
+ENDFORM.                    " GET_LOGO_ADD
+*&---------------------------------------------------------------------*
+*&      Form  GET_SHIP_SOLD_ADD
+*&---------------------------------------------------------------------*
+*       Ship to and Sold to Party address
+*----------------------------------------------------------------------*
+FORM get_ship_sold_add .
+  CLEAR: w_sold_sadr,
+         addr_selection.
+*  to get Sold to Party ADRNR
+  SELECT SINGLE adrnr FROM vbpa
+                      INTO addr_selection-addrnumber
+                     WHERE vbeln = vbrk-vbeln
+                       AND kunnr = j_1iexchdr-kunwe
+                       AND parvw = 'AG'.
+  IF sy-subrc = 0.
+*  addr_selection-addrnumber = kuagv-adrnr.
+*  Get Sold to Party Address
+    CALL FUNCTION 'ADDR_GET'
+      EXPORTING
+        address_selection = addr_selection
+      IMPORTING
+        sadr              = w_sold_sadr
+      EXCEPTIONS
+        parameter_error   = 1
+        address_not_exist = 2
+        version_not_exist = 3
+        internal_error    = 4
+        OTHERS            = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ELSEIF sy-subrc = 0.
+      SELECT SINGLE landx FROM t005t
+                          INTO g_sold_country
+                         WHERE land1 = w_sold_sadr-land1
+                           AND spras = 'EN'.
+    ENDIF.
+  ENDIF.
+
+  CLEAR addr_selection.
+*  to get Sold to Party ADRNR
+  SELECT SINGLE adrnr FROM vbpa
+                      INTO addr_selection-addrnumber
+                     WHERE vbeln = vbrk-vbeln
+                       AND kunnr = j_1iexchdr-kunag
+                       AND parvw = 'WE'.
+  IF sy-subrc = 0.
+*  addr_selection-addrnumber = kuwev-adrnr.
+*  Get Sold to Party Address
+    CALL FUNCTION 'ADDR_GET'
+      EXPORTING
+        address_selection = addr_selection
+      IMPORTING
+        sadr              = w_ship_sadr
+      EXCEPTIONS
+        parameter_error   = 1
+        address_not_exist = 2
+        version_not_exist = 3
+        internal_error    = 4
+        OTHERS            = 5.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ELSEIF sy-subrc = 0.
+      SELECT SINGLE landx FROM t005t
+                          INTO g_ship_country
+                         WHERE land1 = w_ship_sadr-land1
+                           AND spras = 'EN'.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " GET_SHIP_SOLD_ADD
+*&---------------------------------------------------------------------*
+*&      Form  GET_VEND_DET
+*&---------------------------------------------------------------------*
+*       Get Vendor Details
+*----------------------------------------------------------------------*
+FORM get_vend_det .
+  DATA: l_lifnr TYPE j_1iexchdr-lifnr,
+        l_kunnr TYPE j_1iexchdr-kunwe.
+  CLEAR : g_doc,
+          g_date.
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = j_1iexchdr-lifnr
+    IMPORTING
+      output = l_lifnr.
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = j_1iexchdr-kunwe
+    IMPORTING
+      output = l_kunnr.
+  SELECT SINGLE * FROM j_1imovend
+                  INTO j_1imovend
+                 WHERE lifnr = l_lifnr.
+  SELECT SINGLE * FROM lfa1
+                  INTO lfa1
+                 WHERE lifnr = l_lifnr.
+  SELECT SINGLE * FROM j_1imocust
+                  INTO j_1imocust
+                 WHERE kunnr = l_kunnr.
+  SELECT SINGLE * FROM kna1
+                  INTO kna1
+                 WHERE kunnr = l_kunnr.
+  SELECT SINGLE low FROM tvarvc
+                    INTO g_vatno
+                   WHERE name = 'ZNPI_VAT'
+                     AND type = 'P'.
+  SELECT SINGLE low FROM tvarvc
+                    INTO g_docthru
+                   WHERE name = 'ZNPI_THRU'
+                     AND type = 'P'.
+  IF vbrk-fkart EQ 'F2'.
+* Get Order Details
+    SELECT SINGLE * FROM vbak
+                    INTO vbak
+                   WHERE vbeln = vbrk-zuonr.
+    g_doc  = vbrk-zuonr.
+    g_date = vbak-audat.
+    SELECT SINGLE bstkd FROM vbkd
+                        INTO g_bstkd
+                       WHERE vbeln = vbrk-zuonr.
+  ELSEIF vbrk-fkart = 'JEX'.
+    CLEAR g_bstkd.
+    SELECT SINGLE vgbel FROM lips
+                        INTO g_doc
+                       WHERE vbeln = vbrk-xblnr.
+    IF sy-subrc = 0.
+      SELECT SINGLE bedat FROM ekko
+                          INTO g_date
+                         WHERE ebeln = g_doc.
+    ENDIF.
+  ENDIF.
+  SELECT SINGLE * FROM j_1imocomp
+                  INTO j_1imocomp
+                 WHERE bukrs = 'NPIN'
+                   AND werks = t001w-werks.
+
+ENDFORM.                    " GET_VEND_DET
+*&---------------------------------------------------------------------*
+*&      Form  GET_PRICING_DATA
+*&---------------------------------------------------------------------*
+*       To get pricing details
+*----------------------------------------------------------------------*
+FORM get_pricing_data .
+
+  w_bapi_view-sdcond     = 'X'.
+  w_bapi_view-sdcond_add = 'X'.
+
+  APPEND vbrk-zuonr TO t_salesorder.
+  CALL FUNCTION 'BAPISDORDER_GETDETAILEDLIST'
+    EXPORTING
+      i_bapi_view                   = w_bapi_view
+   i_memory_read                 = ' '
+    TABLES
+      sales_documents               = t_salesorder
+*   ORDER_HEADERS_OUT             =
+*   ORDER_ITEMS_OUT               =
+*   ORDER_SCHEDULES_OUT           =
+*   ORDER_BUSINESS_OUT            =
+*   ORDER_PARTNERS_OUT            =
+*   ORDER_ADDRESS_OUT             =
+*   ORDER_STATUSHEADERS_OUT       =
+*   ORDER_STATUSITEMS_OUT         =
+     order_conditions_out          = t_order_conditions_out
+     order_cond_head               = t_order_cond_head
+*   ORDER_COND_ITEM               =
+*   ORDER_COND_QTY_SCALE          =
+*   ORDER_COND_VAL_SCALE          =
+*   ORDER_CONTRACTS_OUT           =
+*   ORDER_TEXTHEADERS_OUT         =
+*   ORDER_TEXTLINES_OUT           =
+*   ORDER_FLOWS_OUT               =
+*   ORDER_CFGS_CUREFS_OUT         =
+*   ORDER_CFGS_CUCFGS_OUT         =
+*   ORDER_CFGS_CUINS_OUT          =
+*   ORDER_CFGS_CUPRTS_OUT         =
+*   ORDER_CFGS_CUVALS_OUT         =
+*   ORDER_CFGS_CUBLBS_OUT         =
+*   ORDER_CFGS_CUVKS_OUT          =
+*   ORDER_BILLINGPLANS_OUT        =
+*   ORDER_BILLINGDATES_OUT        =
+*   ORDER_CREDITCARDS_OUT         =
+*   EXTENSIONOUT                  =
+            .
+
+ENDFORM.                    " GET_PRICING_DATA
+*&---------------------------------------------------------------------*
+*&      Form  AMT_WORDS
+*&---------------------------------------------------------------------*
+*       Convert Amount to Words
+*----------------------------------------------------------------------*
+FORM amt_words  USING    p_g_val
+                CHANGING p_g_words.
+
+  DATA l_tmp TYPE pc207-betrg.
+
+  l_tmp = p_g_val.
+  CALL FUNCTION 'HR_IN_CHG_INR_WRDS'
+    EXPORTING
+      amt_in_num         = l_tmp
+    IMPORTING
+      amt_in_words       = p_g_words
+    EXCEPTIONS
+      data_type_mismatch = 1
+      OTHERS             = 2.
+
+ENDFORM.                    " AMT_WORDS
+*&---------------------------------------------------------------------*
+*&      Form  GET_TRANS_DET
+*&---------------------------------------------------------------------*
+*       Transportation details
+*----------------------------------------------------------------------*
+FORM get_trans_det .
+  DATA l_vktra LIKE t173-vktra.
+  SELECT SINGLE vktra FROM t173
+                      INTO l_vktra
+                     WHERE vsart = likp-vsart.
+  SELECT SINGLE bezei FROM tvtrt
+                      INTO g_transp_mode
+                     WHERE vktra = l_vktra
+                       AND spras = 'E'.
+ENDFORM.                    " GET_TRANS_DET

@@ -1,0 +1,3891 @@
+*&---------------------------------------------------------------------*
+*& Report  ZINV_DEB_CR_MEMO                                            *
+*  Version      : 1.0                                                  *
+*  Application  :                                                      *
+*  Date created : 20.01.2009                                           *
+*  Description  : Output Report for invoice-Debit/ Credit Memo         *
+*                 SAPScript ZINV_DEB_CR_MEMO                           *
+*----------------------------------------------------------------------*
+* Modification History                                                 *
+*----------------------------------------------------------------------*
+* |Date      |Programmer      | Description                            *
+*----------------------------------------------------------------------*
+* |05.06.2008|Gnanasambanthan | SAP Script Invoice(Portrait)           *
+*----------------------------------------------------------------------*
+*             Print of an invoice-Debit/ Credit Memo by SAPscript     *
+*----------------------------------------------------------------------*
+REPORT ZINV_DEB_CR_MEMO LINE-COUNT 100 MESSAGE-ID vn.
+
+***********************************************************************
+* Definition of tables                                                *
+***********************************************************************
+
+
+TABLES: komk    ,                        "Communication Header for Pricing
+        komp    ,                        "Pricing Communication Item
+        komvd   ,                        "Price Determination Communication-Cond.Record for Printing
+        vbco3   ,                        "Sales Doc.Access Methods: Key Fields: Document Printing
+        vbdkr   ,                        "Document Header View for Billing
+        vbdpr   ,                        "Document Item View for Billing
+        vbdre   ,                        "Sales Document View for Printing ISR
+        conf_out,                        "Configuration Output
+        sadr    ,                        "Address Management: Company Data
+        tvko    ,                        "Organizational Unit: Sales Organizations
+        adrs    ,                        "Address formating function module transfer structure
+        t005    ,                        "Countries
+        t001    ,                        "Company Codes
+        t001g   ,                        "Company Code-Dependent Standard Texts
+        tvcint  ,                        "Description of payment card type
+        konh    ,                        "Conditions (Header)
+        tlic    ,                        "Tax Exemption License
+        fpltvb  ,                        "Reference Structure for XFPLT/YFPLT
+        sdaccdpc,                        "Payments to be cleared
+
+        tvarv   ,                        "Table of variables in selection criteria
+        tvarvc  ,                        "Table of Variant Variables (Client-Specific)
+        kna1    ,                        "General Data in Customer Master
+        vbkd    ,                        "Sales Document: Business Data
+        likp    ,                        "SD document: Delivery Header Data
+        lips    ,                        "SD Document: Delivery Item Data.
+        vbak    ,                        "Sales Document Header Data
+        vbrp    ,                        "Billing Document: Item Data
+        t005t   ,                        "Country Names
+        tvzbt   ,                        "Customers: Terms of Payment Texts
+        VBFA    ,
+        J_1IMOCOMP.
+
+*ENHANCEMENT-POINT RVADIN01_01 SPOTS ES_RVADIN01 STATIC.
+***********************************************************************
+* Additional definitions of tables for general issues                 *
+***********************************************************************
+* Data for printout Slovakia
+TABLES: vbrk, bkpf, bset.
+
+* Data for printout discount information
+TABLES: vbdprl, vtopis.
+
+INCLUDE rvadtabl.
+
+***********************************************************************
+* Definition of internal tables                                       *
+***********************************************************************
+
+DATA: BEGIN OF tvbdpr OCCURS 100.      "Internal table for items
+        INCLUDE STRUCTURE vbdpr.
+DATA: END OF tvbdpr.
+
+DATA: BEGIN OF tkomv OCCURS 50.
+        INCLUDE STRUCTURE komv.
+DATA: END OF tkomv.
+
+DATA: BEGIN OF tkomvd OCCURS 50.
+        INCLUDE STRUCTURE komvd.
+DATA: END OF tkomvd.
+
+DATA: BEGIN OF *tkomvd OCCURS 50.
+        INCLUDE STRUCTURE komvd.
+DATA: END OF *tkomvd.
+
+DATA: BEGIN OF hkomv OCCURS 50.
+        INCLUDE STRUCTURE komv.
+DATA: END OF hkomv.
+
+DATA: BEGIN OF hkomvd OCCURS 50.
+        INCLUDE STRUCTURE komvd.
+DATA: END OF hkomvd.
+
+DATA: BEGIN OF tkomcon OCCURS 50.
+        INCLUDE STRUCTURE conf_out.
+DATA: END   OF tkomcon.
+
+* Definition of downpayment data
+
+DATA: BEGIN OF ixsdaccdpc OCCURS 0.
+        INCLUDE STRUCTURE sdaccdpc.
+DATA: END OF ixsdaccdpc.
+
+DATA: BEGIN OF gt_sdaccdpc_doc OCCURS 0,
+        vbeln TYPE vbeln,
+        posnr TYPE posnr.
+DATA: END OF gt_sdaccdpc_doc.
+
+DATA: da_xfilkd LIKE tvfk-xfilkd,
+      chara TYPE c VALUE 'A',
+      charb TYPE c VALUE 'B'.
+DATA: downpay_refresh.
+
+***********************************************************************
+* Definition of Work Area                                             *
+***********************************************************************
+DATA : BEGIN OF W_KOMV.
+        INCLUDE STRUCTURE tkomv.
+DATA : END OF W_KOMV.
+***********************************************************************
+* Definition of internal variables                                    *
+***********************************************************************
+DATA: retcode   LIKE sy-subrc.         "Returncode
+DATA: repeat(1) TYPE c.
+DATA: anzal LIKE nast-anzal.           "HUNGARY
+DATA: nast_anzal LIKE nast-anzal.      "Number of outputs (Orig. + Cop.)
+DATA: nast_tdarmod LIKE nast-tdarmod.  "Archiving only one time
+DATA: xscreen(1) TYPE c.               "Output on printer or screen
+DATA: xvbeln LIKE vbrk-vbeln.
+DATA: xposnr LIKE vbrl-posnr.
+DATA: pr_kappl(01)   TYPE c VALUE 'V'. "Application for pricing
+DATA: print_mwskz.                     "Mehrwertsteuer-Kz drucken
+DATA: ccname(30) TYPE c.               "Card Type
+
+DATA : sadr1 LIKE sadr.                "Address Details
+DATA : sadr2 LIKE sadr.                "Address Details
+DATA : sadr3 LIKE sadr.                "Address Details
+DATA : v_landx LIKE   t005t-landx.
+DATA : v_landx1 LIKE   t005t-landx.
+DATA : u_price LIKE vbdpr-netwr.
+DATA : v_flag TYPE c.
+DATA : t_line LIKE tline OCCURS 0 WITH HEADER LINE.
+DATA : top_text1 LIKE vtopis OCCURS 0 WITH HEADER LINE.
+* Internal Variables for Note - Additional Information
+DATA : l_line1 LIKE t_line-tdline,
+       l_line2 LIKE t_line-tdline,
+       l_line3 LIKE t_line-tdline,
+       l_line4 LIKE t_line-tdline,
+       l_line5 LIKE t_line-tdline,
+       l_line6 LIKE t_line-tdline.
+* Internal Variables for Total Calculations
+DATA : v_stotal LIKE komk-supos.
+DATA : v_gst    LIKE komvd-kwert.
+DATA : v_gtotal LIKE komk-fkwrt.
+* Internal variable used to fetch Address of place of issue(Sales Office) of Credit/ Debit Memo
+data :l_adnr like RSSCE-TDNAME.
+data :l_adnr1 like RSSCE-TDNAME.
+* Internal variable used to fetch Reference Document Date
+DATA : l_ref_date LIKE vbrk-fkdat.
+* Internal variable used to print the Net.Amount in Numbers into Words
+DATA : L_AMOUNT TYPE PC207-BETRG.
+DATA : G_WORDS(255).
+* Internal Variable used to fetch and print details in info window.
+DATA : G_S_VBELN LIKE VBAK-VBELN.
+DATA : G_CMR_VBELN LIKE VBAK-VBELN.
+DATA : G_X_VBELN LIKE VBAK-VBELN.
+DATA : G_I_VBELN LIKE VBRK-VBELN.
+DATA : G_DEL_VBELN LIKE LIPS-VBELN.
+* Internal variables used for Tax/ Discount Totalling
+DATA : G_DISC  TYPE NETWR.
+DATA : G_VAT   TYPE NETWR.
+DATA : G_OCT   TYPE NETWR.
+DATA : G_VCESS TYPE NETWR.
+DATA : G_ATAX  TYPE NETWR.
+
+DATA : G_C_DISC(40)."  TYPE NETWR.
+DATA : G_C_VAT(40)."   TYPE NETWR.
+DATA : G_C_OCT(40)."   TYPE NETWR.
+DATA : G_C_VCESS(40)." TYPE NETWR.
+DATA : G_C_ATAX(40)."  TYPE NETWR.
+
+DATA : G_NETWR1    TYPE NETWR.
+DATA : G_TOTAL     TYPE NETWR.
+DATA : G_GR_TOTAL  TYPE NETWR.
+DATA : G_AMT_DISC  TYPE NETWR.
+DATA : G_GRA_TOTAL TYPE NETWR.
+DATA : G_GRR_TOTAL(40).
+DATA : G_VATPER(40).
+DATA : G_DISCPER(15).
+DATA : G_PAGE(5).
+DATA : G_TOT_PAGE(5).
+DATA : g_b_vat LIKE kna1-stceg.
+DATA : g_p_vat LIKE kna1-stceg.
+DATA : g_d_lstno LIKE J_1IMOCOMP-J_1ILSTNO.
+DATA : G_b_CST LIKE J_1IMOCUST-J_1ICSTNO.
+DATA : G_p_CST LIKE J_1IMOCUST-J_1ICSTNO.
+DATA : G_d_CSTno LIKE J_1IMOCOMP-J_1ICSTNO.
+DATA : G_LIN_VAT TYPE P DECIMALS 2.
+DATA : G_QTY_TOT TYPE P DECIMALS 3.
+DATA : G_PACK_SIZE(10).
+DATA : G_TOT_PACKS(10).
+DATA : G_CART LIKE MARA-MTART.
+DATA : G_PCH      TYPE  I,
+       G_CARTONS  TYPE  I,
+       G_DRUM     TYPE  I,
+       G_BAG      TYPE  I,
+       G_CAN      TYPE  I,
+       G_TINS     TYPE  I,
+       G_BARREL   TYPE  I,
+       G_BUCKET   TYPE  I.
+DATA : G_GROSS_WT LIKE VBAP-BRGEW.
+DATA : G_TOT_WT(20).
+DATA : G_CNT type i.
+DATA : G_ADRS_PRINT  TYPE ADRS_PRINT.
+DATA : G_ADRS_PRINT1 TYPE ADRS_PRINT.
+DATA : G_ADRS_PRINT2 TYPE ADRS_PRINT.
+DATA : G_ADRS_PRINT3 TYPE ADRS_PRINT.
+data : p_adrnr  type AD_ADDRNUM.
+data : p_adrnr1 type AD_ADDRNUM.
+data : p_adrnr2 type AD_ADDRNUM.
+data : p_adrnr3 type AD_ADDRNUM.
+***********************************************************************
+* Definition of variables for calling customer subroutines dynamically*
+***********************************************************************
+DATA : header_userexit       LIKE tnapr-ronam,
+       item_userexit         LIKE tnapr-ronam,
+       header_print_userexit LIKE tnapr-ronam,
+       item_print_userexit   LIKE tnapr-ronam,
+       get_data_userexit     LIKE tnapr-ronam.
+***********************************************************************
+* Specific data of ENTRY_CH
+***********************************************************************
+DATA print_local_curr_ch.
+DATA: komvdk_ch LIKE komvd OCCURS 10 WITH HEADER LINE.
+DATA: komvdp_ch LIKE komvd OCCURS 10 WITH HEADER LINE.
+* country specific entry routines
+INCLUDE idbillprint.
+*ENHANCEMENT-POINT RVADIN01_07 SPOTS ES_RVADIN01 STATIC .
+* data for access to central address maintenance
+INCLUDE sdzavdat.
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY                                              *
+*                                                                     *
+***********************************************************************
+FORM entry USING return_code us_screen.
+
+  CLEAR retcode.
+  xscreen = us_screen.
+  PERFORM processing USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+
+ENDFORM.                    "ENTRY
+
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY_PROFORMA                                     *
+*                                                                     *
+***********************************************************************
+
+FORM entry_proforma USING return_code us_screen.
+
+  CLEAR return_code.
+
+ENDFORM.                    "ENTRY_PROFORMA
+
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY_ESR                                          *
+*                                                                     *
+***********************************************************************
+
+FORM entry_esr USING return_code us_screen.
+
+  CLEAR retcode.
+  xscreen = us_screen.
+  PERFORM processing_esr USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+
+ENDFORM.                    "ENTRY_ESR
+
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY_ITALY                                        *
+*                                                                     *
+***********************************************************************
+
+FORM entry_italy USING return_code us_screen.
+
+  CLEAR retcode.
+  xscreen = us_screen.
+  PERFORM processing_italy USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+
+ENDFORM.                    "ENTRY_ITALY
+
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY_CH                                           *
+*                                                                     *
+***********************************************************************
+
+FORM entry_ch USING return_code us_screen.
+  CLEAR retcode.
+  xscreen = us_screen.
+  header_userexit = 'HEADER_CH'.
+  item_userexit = 'ITEM_CH'.
+  header_print_userexit = 'HEADER_PRINT_CH'.
+  item_print_userexit = 'ITEM_PRINT_CH'.
+  PERFORM processing USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+ENDFORM.                    "ENTRY_CH
+
+***********************************************************************
+*                                                                     *
+* Standard Routine ENTRY_HUNGARY
+*
+*                                                                     *
+***********************************************************************
+
+FORM entry_hungary USING return_code us_screen.
+
+  CLEAR retcode.
+  xscreen = us_screen.
+  PERFORM processing_hungary USING us_screen.
+  CASE retcode.
+    WHEN 0.
+      return_code = 0.
+    WHEN 3.
+      return_code = 3.
+    WHEN OTHERS.
+      return_code = 1.
+  ENDCASE.
+
+ENDFORM.                    "ENTRY_HUNGARY
+
+***********************************************************************
+*                                                                     *
+* Customer Entry-Routines                                             *
+*                                                                     *
+***********************************************************************
+
+***********************************************************************
+*                                                                     *
+* Standard Routine PROCESSING                                         *
+*                                                                     *
+***********************************************************************
+
+FORM processing USING proc_screen.
+
+  PERFORM get_data.
+  CHECK retcode = 0.
+  IF nast-anzal EQ 0.
+    nast_anzal = 1.
+  ELSE.
+    nast_anzal = nast-anzal.
+  ENDIF.
+  nast-anzal = 1.
+  DO nast_anzal TIMES.
+* In the case of repetition only one time archiving
+    IF sy-index > 1 AND nast-tdarmod = 3.
+      nast_tdarmod = nast-tdarmod.
+      nast-tdarmod = 1.
+    ENDIF.
+    IF sy-index NE 1 AND repeat IS INITIAL.
+      repeat = 'X'.
+    ENDIF.
+    PERFORM form_open USING proc_screen vbdkr-land1.
+    CHECK retcode = 0.
+    PERFORM form_title_print.
+    CHECK retcode = 0.
+    PERFORM header_consgnee.
+    CHECK retcode = 0.
+    PERFORM tax_text_print.
+    CHECK retcode = 0.
+    PERFORM header_data_print.
+    CHECK retcode = 0.
+    PERFORM header_text_print.
+    CHECK retcode = 0.
+    PERFORM item_print.
+    CHECK retcode = 0.
+    PERFORM end_print.
+    CHECK retcode = 0.
+    PERFORM form_close.
+    CHECK retcode = 0.
+  ENDDO.
+  nast-anzal = nast_anzal.
+  nast-tdarmod = nast_tdarmod.
+ENDFORM.                    "PROCESSING
+
+***********************************************************************
+*                                                                     *
+* Standard Routine PROCESSING_ESR                                     *
+*                                                                     *
+***********************************************************************
+
+FORM processing_esr USING proc_screen.
+
+  DATA : lt_fplt LIKE fpltvb OCCURS 1 WITH HEADER LINE.
+  DATA : ld_fkwrt LIKE acccr-wrbtr.
+  PERFORM get_data.
+  ld_fkwrt = komk-fkwrt.
+  CALL FUNCTION 'BILLING_SCHEDULE_CREATE_T052S'
+    EXPORTING
+      zterm                   = vbdkr-zterm
+      wert                    = ld_fkwrt
+      waerk                   = vbdkr-waerk
+      fkdat                   = vbdkr-fkdat
+      i_company_code          = vbdkr-bukrs
+    TABLES
+      zfplt                   = lt_fplt
+    EXCEPTIONS
+      no_entry_t052s          = 1
+      no_zfbdt                = 2
+      no_entry_t052           = 3
+      no_billing_schedule     = 4
+      no_entry_in_t001r_found = 5
+      OTHERS                  = 6.
+  IF sy-subrc EQ 4.
+    PERFORM get_data_esr.
+    CHECK retcode = 0.
+    PERFORM form_open USING proc_screen vbdkr-land1.
+    CHECK retcode = 0.
+    PERFORM start_form.
+    CHECK retcode = 0.
+    PERFORM header_consgnee.
+    CHECK retcode = 0.
+    PERFORM header_text_print.
+    CHECK retcode = 0.
+    PERFORM item_print.
+    CHECK retcode = 0.
+    PERFORM end_print.
+    CHECK retcode = 0.
+    PERFORM form_close.
+    CHECK retcode = 0.
+  ELSEIF sy-subrc IS INITIAL.
+    LOOP AT lt_fplt.
+      komk-fkwrt = lt_fplt-fakwr.
+      PERFORM get_data_esr.
+      CHECK retcode = 0.
+      PERFORM form_open USING proc_screen vbdkr-land1.
+      CHECK retcode = 0.
+      PERFORM start_form.
+      CHECK retcode = 0.
+      PERFORM header_consgnee.
+      CHECK retcode = 0.
+      PERFORM header_text_print.
+      CHECK retcode = 0.
+      PERFORM item_print.
+      CHECK retcode = 0.
+      PERFORM end_print.
+      CHECK retcode = 0.
+      PERFORM form_close.
+      CHECK retcode = 0.
+    ENDLOOP.
+  ELSE.
+    retcode = sy-subrc.
+*   Die Zahlungsbedingungen sind fehlerhaft
+    syst-msgid = 'F5'.
+    syst-msgno = 158.
+    syst-msgty = 'E'.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "PROCESSING_ESR
+
+***********************************************************************
+*                                                                     *
+* Standard Routine PROCESSING_ITALY                                   *
+*                                                                     *
+***********************************************************************
+
+FORM processing_italy USING proc_screen.
+
+  PERFORM get_data.
+  PERFORM get_data_italy USING proc_screen.
+  CHECK retcode = 0.
+  PERFORM form_open USING proc_screen vbdkr-land1.
+  CHECK retcode = 0.
+  PERFORM form_title_print.
+  CHECK retcode = 0.
+  PERFORM header_consgnee.
+  CHECK retcode = 0.
+  PERFORM tax_text_print.
+  CHECK retcode = 0.
+  PERFORM header_data_print.
+  CHECK retcode = 0.
+  PERFORM header_text_print.
+  CHECK retcode = 0.
+  PERFORM item_print.
+  CHECK retcode = 0.
+  PERFORM end_print.
+  CHECK retcode = 0.
+  PERFORM form_close.
+  CHECK retcode = 0.
+
+ENDFORM.                    "PROCESSING_ITALY
+
+***********************************************************************
+*                                                                     *
+* Standard Routine PROCESSING_HUNGARY
+*
+*                                                                     *
+***********************************************************************
+
+FORM processing_hungary USING proc_screen.
+
+  PERFORM get_data.
+  CHECK retcode = 0.
+  IF nast-anzal EQ 0.
+    nast_anzal = 1.
+  ELSE.
+    nast_anzal = nast-anzal.
+  ENDIF.
+  nast-anzal = 1.
+  DO nast_anzal TIMES.
+    IF sy-index NE 1 AND repeat IS INITIAL.
+      repeat = 'X'.
+    ENDIF.
+    PERFORM form_open USING proc_screen vbdkr-land1.
+    CHECK retcode = 0.
+    PERFORM form_title_print_hu.
+    CHECK retcode = 0.
+    PERFORM header_consgnee.
+    CHECK retcode = 0.
+    CLEAR vbdkr-counter_hu.
+    IF NOT repeat IS INITIAL.
+      IF anzal = 0.
+        anzal = 1.
+      ENDIF.
+      MOVE anzal TO vbdkr-counter_hu.
+      CONDENSE vbdkr-counter_hu.
+      anzal = anzal + 1.
+    ENDIF.
+    PERFORM tax_text_print.
+    CHECK retcode = 0.
+    PERFORM header_data_print.
+    CHECK retcode = 0.
+    PERFORM header_text_print.
+    CHECK retcode = 0.
+    PERFORM item_print.
+    CHECK retcode = 0.
+    PERFORM end_print.
+    CHECK retcode = 0.
+    PERFORM form_close.
+    CHECK retcode = 0.
+  ENDDO.
+  nast-anzal = nast_anzal.
+
+ENDFORM.                    "PROCESSING_HUNGARY
+
+***********************************************************************
+*       SAP STANDARD-SUBROUTINES                                      *
+***********************************************************************
+
+*---------------------------------------------------------------------*
+*       FORM AMOUNT_FOR_CASH_DISCOUNT                                 *
+*---------------------------------------------------------------------*
+*       This routine prints the amount qualifying for cash discount.  *
+*---------------------------------------------------------------------*
+
+FORM amount_for_cash_discount.
+
+  CHECK vbdkr-skfbk NE 0.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'AMOUNT_QUALIFYING_FOR_CASH_DISCOUNT'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "AMOUNT_FOR_CASH_DISCOUNT
+
+*---------------------------------------------------------------------*
+*       FORM PAYMENT_SPLIT                                            *
+*---------------------------------------------------------------------*
+*       This routine prints the payment split                         *
+*---------------------------------------------------------------------*
+FORM payment_split.
+
+  DATA: h_skfbt LIKE acccr-skfbt.
+  DATA: h_fkdat LIKE vbrk-fkdat.
+  DATA: h_fkwrt LIKE acccr-wrbtr.
+  DATA : BEGIN OF payment_split OCCURS 3.
+          INCLUDE STRUCTURE vtopis.
+  DATA : END OF payment_split.
+
+
+  CHECK vbdkr-zterm NE space.
+
+  h_skfbt = vbdkr-skfbk.
+  h_fkwrt = komk-fkwrt.
+  h_fkdat = vbdkr-fkdat.
+  IF vbdkr-valdt NE 0.
+    h_fkdat = vbdkr-valdt.
+  ENDIF.
+  IF vbdkr-valtg NE 0.
+    h_fkdat = vbdkr-fkdat + vbdkr-valtg.
+  ENDIF.
+  CALL FUNCTION 'SD_PRINT_TERMS_OF_PAYMENT_SPLI'
+    EXPORTING
+      i_country                     = vbdkr-land1
+      bldat                         = h_fkdat
+      budat                         = h_fkdat
+      cpudt                         = h_fkdat
+      language                      = vbco3-spras
+      terms_of_payment              = vbdkr-zterm
+      wert                          = h_fkwrt  "Warenwert + Tax
+      waerk                         = vbdkr-waerk
+      fkdat                         = vbdkr-fkdat
+      skfbt                         = h_skfbt
+      i_company_code                = vbdkr-bukrs
+    TABLES
+      top_text_split                = payment_split
+    EXCEPTIONS
+      terms_of_payment_not_in_t052  = 01
+      terms_of_payment_not_in_t052s = 02.
+
+  LOOP AT payment_split.
+
+    AT FIRST.
+      CALL FUNCTION 'CONTROL_FORM'
+        EXPORTING
+          command = 'PROTECT'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TERMS_OF_PAYMENT_SPLIT_HEADER'.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ENDAT.
+
+    vbdkr-text = payment_split-line.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'TERMS_OF_PAYMENT_SPLIT'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+
+    AT LAST.
+      CALL FUNCTION 'CONTROL_FORM'
+        EXPORTING
+          command = 'ENDPROTECT'.
+    ENDAT.
+
+  ENDLOOP.
+
+ENDFORM.                    "PAYMENT_SPLIT
+
+*---------------------------------------------------------------------*
+*       FORM CHECK_REPEAT
+*
+*---------------------------------------------------------------------*
+*       A text is printed, if it is a repeat print for the document.  *
+*---------------------------------------------------------------------*
+
+FORM check_repeat.
+
+  CLEAR repeat.
+  CLEAR anzal.
+  SELECT * INTO *nast FROM nast WHERE kappl = nast-kappl
+                                AND   objky = nast-objky
+                                AND   kschl = nast-kschl
+                                AND   spras = nast-spras
+                                AND   parnr = nast-parnr
+                                AND   parvw = nast-parvw
+                                AND   nacha BETWEEN '1' AND '4'.
+    IF *nast-vstat = '1'.
+      anzal = anzal + *nast-anzal.
+      repeat = 'X'.
+    ENDIF.
+  ENDSELECT.
+
+ENDFORM.                    "CHECK_REPEAT
+
+*---------------------------------------------------------------------*
+*       FORM DIFFERENT_CONSIGNEE                                      *
+*---------------------------------------------------------------------*
+*       If the consignee in the item is different to the header con-  *
+*       signee, it is printed by this routine.                        *
+*---------------------------------------------------------------------*
+
+FORM different_consignee.
+
+  CHECK vbdkr-name1_we NE vbdpr-name1_we
+    OR  vbdkr-name2_we NE vbdpr-name2_we
+    OR  vbdkr-name3_we NE vbdpr-name3_we
+    OR  vbdkr-name4_we NE vbdpr-name4_we.
+  CHECK vbdpr-name1_we NE space
+    OR  vbdpr-name2_we NE space
+    OR  vbdpr-name3_we NE space
+    OR  vbdpr-name4_we NE space.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_CONSIGNEE'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "DIFFERENT_CONSIGNEE
+
+*---------------------------------------------------------------------*
+*       FORM DIFFERENT_DELIVERY_NO                                    *
+*---------------------------------------------------------------------*
+*       If the delivery number is different to number in the header,  *
+*       it is printed by this routine.                                *
+*---------------------------------------------------------------------*
+
+FORM different_delivery_no.
+
+  CHECK vbdkr-vbtyp CA 'MUN'.
+  CHECK vbdpr-vbeln_vl NE vbdpr-vbeln_vauf.
+  CHECK vbdkr-vbeln_vl NE vbdpr-vbeln_vl.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_DELIVERY_NO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "DIFFERENT_DELIVERY_NO
+
+*---------------------------------------------------------------------*
+*       FORM DIFFERENT_ORDER_NO                                       *
+*---------------------------------------------------------------------*
+*       If the order number is different to number in the header,     *
+*       it is printed by this routine.                                *
+*---------------------------------------------------------------------*
+
+FORM different_order_no.
+
+  CHECK vbdkr-vbtyp CA 'MUN'.
+  CHECK vbdpr-vbeln_vauf NE space.
+  CHECK vbdkr-vbeln_vauf NE vbdpr-vbeln_vauf.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_ORDER_NO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "DIFFERENT_ORDER_NO
+
+*---------------------------------------------------------------------*
+*       FORM DIFFERENT_EXTERN_NO                                      *
+*---------------------------------------------------------------------*
+*       If the extern number is different to number in the header,    *
+*       it is printed by this routine.                                *
+*---------------------------------------------------------------------*
+
+FORM different_extern_no.
+
+  CHECK vbdkr-vbtyp CA 'MUN'.
+  CHECK vbdkr-vbeln_vauf EQ space.
+  CHECK vbdkr-vbeln_vl   EQ space.
+  CHECK vbdpr-vbeln_vauf EQ space.
+  CHECK vbdpr-vbeln_vl   EQ space.
+  CHECK vbdkr-vgbel NE vbdpr-vgbel.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_EXTERN_NO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "DIFFERENT_EXTERN_NO
+*---------------------------------------------------------------------*
+*       FORM DIFFERENT_PURCHASE_ORDER_NO                              *
+*---------------------------------------------------------------------*
+*       If the purchase order number is different to number in the    *
+*       header, it is printed by this routine.                        *
+*---------------------------------------------------------------------*
+
+FORM different_purchase_order_no.
+
+  CHECK vbdkr-vbtyp CA 'MUN'.
+  CHECK vbdpr-bstnk NE space.
+  CHECK vbdkr-bstnk NE vbdpr-bstnk
+    OR  vbdkr-bstdk NE vbdpr-bstdk.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_PURCHASE_ORDER_NO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "DIFFERENT_PURCHASE_ORDER_NO
+
+*---------------------------------------------------------------------*
+*       FORM END_PRINT                                                *
+*---------------------------------------------------------------------*
+*                                                                     *
+*---------------------------------------------------------------------*
+
+FORM end_print.
+
+  PERFORM note_text.
+  PERFORM total_text.
+
+  CALL FUNCTION 'CONTROL_FORM'
+    EXPORTING
+      command = 'PROTECT'.
+  PERFORM header_price_print.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'END_VALUES'.
+  PERFORM downpayment_value.
+  PERFORM paymentcard_values.
+  PERFORM amount_for_cash_discount.
+
+  CALL FUNCTION 'CONTROL_FORM'
+    EXPORTING
+      command = 'ENDPROTECT'.
+  PERFORM payment_split.
+
+  PERFORM downpayments.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'SUPPLEMENT_TEXT'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "END_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM FORM_CLOSE                                               *
+*---------------------------------------------------------------------*
+*       End of printing the form                                      *
+*---------------------------------------------------------------------*
+
+FORM form_close.
+
+  DATA: i_itcpp LIKE itcpp.
+
+* insert note 508569 {
+* OTF-Output, wenn Browser-Druck
+*
+* Define Internal table for OTF-Data
+  DATA: otf_data LIKE itcoo OCCURS 0 WITH HEADER LINE.
+  IF nast-sort1 = 'EBPP'.
+    CALL FUNCTION 'CLOSE_FORM'
+      IMPORTING
+        RESULT  = i_itcpp
+      TABLES
+        otfdata = otf_data
+      EXCEPTIONS
+        OTHERS  = 1.
+
+  ELSE.
+* } end note 508569
+    CALL FUNCTION 'CLOSE_FORM'
+      IMPORTING
+        RESULT = i_itcpp
+      EXCEPTIONS
+        OTHERS = 1.
+* insert note 508569 {
+  ENDIF.
+* } end note 508569
+
+  IF sy-subrc NE 0.
+    retcode = sy-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+
+* insert note 508569 {
+  IF nast-sort1 = 'EBPP'.
+    CALL FUNCTION 'SAVE_OTF_TO_MEMORY'
+      EXPORTING
+        memory_key = nast-objky
+      TABLES
+        otf        = otf_data.
+  ENDIF.
+* } end note 508569
+
+  IF i_itcpp-tdspoolid NE space.
+    PERFORM protocol_update_spool USING '342' i_itcpp-tdspoolid
+                                              space space space.
+  ENDIF.
+
+  SET COUNTRY space.
+
+* update number of printed pages in VBRK for Argentina
+  CALL FUNCTION 'J_1A_SD_UPD_NUM_OF_PAGES'
+    EXPORTING
+      pages = i_itcpp-tdpages
+      vbeln = vbdkr-vbeln
+      bukrs = vbdkr-bukrs.
+
+
+ENDFORM.                    "FORM_CLOSE
+
+*---------------------------------------------------------------------*
+*       FORM FORM_OPEN                                                *
+*---------------------------------------------------------------------*
+*       Start of printing the form                                    *
+*---------------------------------------------------------------------*
+*  -->  US_SCREEN  Output on screen                                   *
+*                  ' ' = Printer                                      *
+*                  'X' = Screen                                       *
+*  -->  US_COUNTRY County for telecommunication and SET COUNTRY       *
+*---------------------------------------------------------------------*
+
+FORM form_open USING us_screen us_country.
+
+  INCLUDE rvadopfo.
+
+ENDFORM.                    "FORM_OPEN
+
+*---------------------------------------------------------------------*
+*       FORM FORM_TITLE_PRINT                                         *
+*---------------------------------------------------------------------*
+*       Printing of the form title depending of the field VBTYP       *
+*---------------------------------------------------------------------*
+
+FORM form_title_print.
+
+  CASE vbdkr-vbtyp.
+    WHEN 'M'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_M'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+*ENHANCEMENT-SECTION     FORM_TITLE_PRINT_01 SPOTS ES_RVADIN01.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+*END-ENHANCEMENT-SECTION.
+    WHEN 'N'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_N'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'O'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_O'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'P'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_P'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'S'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_S'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'U'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_U'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN OTHERS.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_M'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+  ENDCASE.
+  IF repeat NE space.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'REPEAT'
+        window  = 'REPEAT'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    "FORM_TITLE_PRINT
+*---------------------------------------------------------------------*
+*       FORM FORM_TITLE_PRINT_HU
+*
+*---------------------------------------------------------------------*
+*       Printing of the form title depending of the field VBTYP       *
+*---------------------------------------------------------------------*
+
+FORM form_title_print_hu.
+
+  CASE vbdkr-vbtyp.
+    WHEN 'M'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_M'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'N'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_N'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'O'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_O'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'P'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_P'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'S'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_S'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN 'U'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_U'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    WHEN OTHERS.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TITLE_M'
+          window  = 'TITLE'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+  ENDCASE.
+  vbdkr-repeat_hu = repeat.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'REPEAT'
+      window  = 'REPEAT'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "FORM_TITLE_PRINT_HU
+
+*---------------------------------------------------------------------*
+*       FORM GET_DATA                                                 *
+*---------------------------------------------------------------------*
+*       General provision of data for the form                        *
+*---------------------------------------------------------------------*
+
+FORM get_data.
+
+  CALL FUNCTION 'RV_PRICE_PRINT_REFRESH'
+    TABLES
+      tkomv = tkomv.
+  CLEAR komk.
+  CLEAR komp.
+  CLEAR nast_anzal.      "Clear aux. variable for number of outputs
+  CLEAR   sdaccdpc.
+  REFRESH ixsdaccdpc.
+  CLEAR downpay_refresh.
+
+
+  IF nast-objky+10(6) NE space.
+    vbco3-vbeln = nast-objky+16(10).
+  ELSE.
+    vbco3-vbeln = nast-objky.
+  ENDIF.
+
+  vbco3-mandt = sy-mandt.
+  vbco3-spras = nast-spras.
+  vbco3-kunde = nast-parnr.
+  vbco3-parvw = nast-parvw.
+
+  CALL FUNCTION 'RV_BILLING_PRINT_VIEW'
+    EXPORTING
+      comwa                        = vbco3
+    IMPORTING
+      kopf                         = vbdkr
+    TABLES
+      pos                          = tvbdpr
+    EXCEPTIONS
+      terms_of_payment_not_in_t052 = 1
+      error_message                = 5
+      OTHERS                       = 4.
+  IF NOT sy-subrc IS INITIAL.
+    IF sy-subrc = 1.
+      syst-msgty = 'I'.
+      PERFORM protocol_update.
+    ENDIF.
+  ENDIF.
+
+* fill address key --> necessary for emails
+  addr_key-addrnumber = vbdkr-adrnr.
+  addr_key-persnumber = vbdkr-adrnp.
+  addr_key-addr_type  = vbdkr-address_type.
+
+  PERFORM sender.
+  PERFORM check_repeat.
+  PERFORM get_header_prices.
+* Calling customer subroutine dynamically for additional data transfer
+  IF NOT get_data_userexit IS INITIAL.
+    PERFORM (get_data_userexit) IN PROGRAM rvadin01 IF FOUND.
+  ENDIF.
+ENDFORM.                    "GET_DATA
+
+
+*---------------------------------------------------------------------*
+*       FORM GET_ITEM_CHARACTERISTICS                                 *
+*---------------------------------------------------------------------*
+*       In this routine the configuration data item is fetched from   *
+*       the database.                                                 *
+*---------------------------------------------------------------------*
+
+FORM get_item_characteristics.
+
+  DATA da_t_cabn LIKE cabn OCCURS 10 WITH HEADER LINE.
+  DATA: BEGIN OF da_key,
+          mandt LIKE cabn-mandt,
+          atinn LIKE cabn-atinn,
+        END   OF da_key.
+
+  REFRESH tkomcon.
+  CHECK NOT vbdpr-cuobj IS INITIAL.
+
+  CALL FUNCTION 'VC_I_GET_CONFIGURATION'
+    EXPORTING
+      instance      = vbdpr-cuobj
+      language      = nast-spras
+      print_sales   = 'X'
+    TABLES
+      configuration = tkomcon
+    EXCEPTIONS
+      OTHERS        = 4.
+
+  RANGES : da_in_cabn FOR da_t_cabn-atinn.
+* Beschreibung der Merkmale wegen Objektmerkmalen auf sdcom-vkond holen
+  CLEAR da_in_cabn. REFRESH da_in_cabn.
+  LOOP AT tkomcon.
+    da_in_cabn-option = 'EQ'.
+    da_in_cabn-sign   = 'I'.
+    da_in_cabn-low    = tkomcon-atinn.
+    APPEND da_in_cabn.
+  ENDLOOP.
+
+  CLEAR da_t_cabn. REFRESH da_t_cabn.
+  CALL FUNCTION 'CLSE_SELECT_CABN'
+*    EXPORTING
+*         KEY_DATE                     = SY-DATUM
+*         BYPASSING_BUFFER             = ' '
+*         WITH_PREPARED_PATTERN        = ' '
+*         I_AENNR                      = ' '
+*    IMPORTING
+*         AMBIGUOUS_OBJ_CHARACTERISTIC =
+     TABLES
+          in_cabn                      = da_in_cabn
+          t_cabn                       = da_t_cabn
+     EXCEPTIONS
+          no_entry_found               = 1
+          OTHERS                       = 2.
+
+* Preisfindungsmerkmale und Merkmale auf vcsd_update herausnehmen
+  SORT da_t_cabn.
+  LOOP AT tkomcon.
+    da_key-mandt = sy-mandt.
+    da_key-atinn = tkomcon-atinn.
+    READ TABLE da_t_cabn WITH KEY da_key BINARY SEARCH.
+    IF sy-subrc <> 0 OR
+         ( ( da_t_cabn-attab = 'SDCOM' AND
+            da_t_cabn-atfel = 'VKOND'       ) OR
+          ( da_t_cabn-attab = 'VCSD_UPDATE' ) ) .
+      DELETE tkomcon.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                    "GET_ITEM_CHARACTERISTICS
+
+*---------------------------------------------------------------------*
+*       FORM GET_ITEM_PRICES                                          *
+*---------------------------------------------------------------------*
+*       In this routine the price data for the item is fetched from   *
+*       the database.                                                 *
+*---------------------------------------------------------------------*
+
+FORM get_item_prices.
+
+  CLEAR: komp,
+         tkomv.
+
+  IF komk-knumv NE vbdkr-knumv.
+    CLEAR komk.
+    komk-mandt = sy-mandt.
+    komk-kalsm = vbdkr-kalsm.
+    komk-fkart = vbdkr-fkart.
+    komk-kappl = pr_kappl.
+    IF vbdkr-kappl NE space.
+      komk-kappl = vbdkr-kappl.
+    ENDIF.
+    komk-waerk = vbdkr-waerk.
+    komk-knumv = vbdkr-knumv.
+    komk-vbtyp = vbdkr-vbtyp.
+    komk-bukrs = vbdkr-bukrs.
+    komk-land1 = vbdkr-lland.
+    komk-vkorg = vbdkr-vkorg.
+    komk-vtweg = vbdkr-vtweg.
+    komk-spart = vbdkr-spart.
+    komk-hwaer = vbdkr-waers.
+    komk-prsdt = vbdkr-erdat.
+    komk-kurst = vbdkr-kurst.
+    komk-kurrf = vbdkr-kurrf.
+    komk-kurrf_dat = vbdkr-kurrf_dat.
+  ENDIF.
+  komp-kposn = vbdpr-posnr.
+  komp-kursk = vbdpr-kursk.
+  komp-kursk_dat = vbdpr-kursk_dat.
+  IF vbdkr-vbtyp CA 'HKNOT6'.
+    IF  vbdpr-shkzg CA ' A'.
+      komp-shkzg = 'X'.
+    ENDIF.
+  ELSE.
+    IF  vbdpr-shkzg CA 'BX'.
+      komp-shkzg = 'X'.
+    ENDIF.
+  ENDIF.
+
+  CALL FUNCTION 'RV_PRICE_PRINT_ITEM'
+    EXPORTING
+      comm_head_i = komk
+      comm_item_i = komp
+      language    = nast-spras
+    IMPORTING
+      comm_head_e = komk
+      comm_item_e = komp
+    TABLES
+      tkomv       = tkomv
+      tkomvd      = tkomvd.
+***********************************************
+
+
+
+* Calling customer subroutine dynamically for handling item prices
+  IF NOT item_userexit IS INITIAL.
+    PERFORM (item_userexit) IN PROGRAM rvadin01 IF FOUND.
+  ENDIF.
+
+
+
+ENDFORM.                    "GET_ITEM_PRICES
+
+*---------------------------------------------------------------------*
+*       FORM GET_HEADER_PRICES                                        *
+*---------------------------------------------------------------------*
+*       In this routine the price data for the header is fetched from *
+*       the database.                                                 *
+*---------------------------------------------------------------------*
+
+FORM get_header_prices.
+
+  IF komk-knumv NE vbdkr-knumv.
+    CLEAR komk.
+    komk-mandt = sy-mandt.
+    komk-kalsm = vbdkr-kalsm.
+    komk-fkart = vbdkr-fkart.
+    komk-kappl = pr_kappl.
+    IF vbdkr-kappl NE space.
+      komk-kappl = vbdkr-kappl.
+    ENDIF.
+    komk-waerk = vbdkr-waerk.
+    komk-knumv = vbdkr-knumv.
+    komk-vbtyp = vbdkr-vbtyp.
+    komk-knuma = vbdkr-knuma.
+    komk-bukrs = vbdkr-bukrs.
+    komk-land1 = vbdkr-lland.
+    komk-vkorg = vbdkr-vkorg.
+    komk-vtweg = vbdkr-vtweg.
+    komk-spart = vbdkr-spart.
+    komk-hwaer = vbdkr-waers.
+    komk-prsdt = vbdkr-erdat.
+    komk-kurst = vbdkr-kurst.
+    komk-kurrf = vbdkr-kurrf.
+    komk-kurrf_dat = vbdkr-kurrf_dat.
+  ENDIF.
+  CALL FUNCTION 'RV_PRICE_PRINT_HEAD'
+    EXPORTING
+      comm_head_i = komk
+      language    = nast-spras
+    IMPORTING
+      comm_head_e = komk
+      comm_mwskz  = print_mwskz
+    TABLES
+      tkomv       = tkomv
+      tkomvd      = hkomvd.
+* Calling customer subroutine dynamically for handling header prices
+  IF NOT header_userexit IS INITIAL.
+    PERFORM (header_userexit) IN PROGRAM rvadin01 IF FOUND.
+  ENDIF.
+
+ENDFORM.                    "GET_HEADER_PRICES
+
+*---------------------------------------------------------------------*
+*       FORM HEADER_PRICE_PRINT                                       *
+*---------------------------------------------------------------------*
+*       Printout of the header prices                                 *
+*---------------------------------------------------------------------*
+
+FORM header_price_print.
+
+  LOOP AT hkomvd.
+
+    AT FIRST.
+      IF komk-supos NE 0.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_SUM'.
+      ELSE.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'UNDER_LINE'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ENDAT.
+
+    komvd = hkomvd.
+    IF print_mwskz = space.
+      CLEAR komvd-mwskz.
+    ENDIF.
+    IF komvd-koaid = 'D'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TAX_LINE'.
+    ELSE.
+      IF NOT komvd-kntyp EQ 'f'.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'SUM_LINE'.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+  DESCRIBE TABLE hkomvd LINES sy-tfill.
+  IF sy-tfill = 0.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'UNDER_LINE'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+  ENDIF.
+* Calling customer subroutine dynamically for handling header price
+* printing
+  IF NOT header_print_userexit IS INITIAL.
+    PERFORM (header_print_userexit) IN PROGRAM rvadin01 IF FOUND.
+  ENDIF.
+
+ENDFORM.                    "HEADER_PRICE_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM HEADER_TEXT_PRINT                                        *
+*---------------------------------------------------------------------*
+*       Printout of the headertexts                                   *
+*---------------------------------------------------------------------*
+
+FORM header_text_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'HEADER_TEXT'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "HEADER_TEXT_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_CHARACERISTICS_PRINT                                *
+*---------------------------------------------------------------------*
+*       Printout of the item characteristics -> configuration         *
+*---------------------------------------------------------------------*
+
+FORM item_characteristics_print.
+
+  LOOP AT tkomcon.
+    conf_out = tkomcon.
+    IF sy-tabix = 1.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'ITEM_LINE_CONFIGURATION_HEADER'
+        EXCEPTIONS
+          OTHERS  = 1.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ELSE.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'ITEM_LINE_CONFIGURATION'
+        EXCEPTIONS
+          OTHERS  = 1.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                    "ITEM_CHARACTERISTICS_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_PRICE_PRINT                                         *
+*---------------------------------------------------------------------*
+*       Printout of the item prices                                   *
+*---------------------------------------------------------------------*
+
+FORM item_price_print.
+
+  LOOP AT tkomvd.
+    komvd = tkomvd.
+    IF print_mwskz EQ space.
+      CLEAR komvd-mwskz.
+    ENDIF.
+    IF sy-tabix = 1.
+*ENHANCEMENT-POINT ITEM_PRICE_PRINT_01 SPOTS ES_RVADIN01.
+      IF komvd-koaid = 'B' OR komvd-kschl IS INITIAL.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_LINE_PRICE_QUANTITY'.
+      ELSE.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_LINE_PRICE_TEXT'.
+      ENDIF.
+    ELSE.
+      IF komvd-kntyp NE 'f'.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_LINE_PRICE_TEXT'.
+      ELSE.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'ITEM_LINE_REBATE_IN_KIND'.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+* Calling customer subroutine dynamically for handling item price
+* printing
+  IF NOT item_print_userexit IS INITIAL.
+    PERFORM (item_print_userexit) IN PROGRAM rvadin01 IF FOUND.
+  ENDIF.
+
+ENDFORM.                    "ITEM_PRICE_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_PRINT                                               *
+*---------------------------------------------------------------------*
+*       Printout of the items                                         *
+*---------------------------------------------------------------------*
+
+FORM item_print.
+
+  DATA: da_ganf(1) TYPE c,      "Print flag for billing correction
+        da_lanf(1) TYPE c.      "Print flag for billing correction
+
+  CALL FUNCTION 'WRITE_FORM'           "First header
+       EXPORTING  element = 'ITEM_HEADER'
+       EXCEPTIONS OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+  CALL FUNCTION 'WRITE_FORM'           "Activate header
+       EXPORTING  element = 'ITEM_HEADER'
+                  type    = 'TOP'
+       EXCEPTIONS OTHERS  = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+  CLEAR G_TOTAL.
+  CLEAR G_C_DISC.
+  CLEAR : G_TOT_PACKS,
+          G_Qty_tot,
+          G_GROSS_WT,
+          G_TOT_WT,
+          G_CARTONS,
+          G_CARTONS,
+          G_DRUM,
+          G_BUCKET,
+          G_TINS,
+          G_BAG,
+          G_BARREL,
+          G_CNT.
+
+
+
+  LOOP AT tvbdpr.
+    G_CNT = G_CNT + 1.
+    vbdpr = tvbdpr.
+* Bei Fakturen, die keine Anzahlungsanforderungen darstellen, werden
+* die Verrechnungspositionen nicht gedruckt
+    IF ( vbdkr-fktyp EQ 'P'  )       OR
+       ( vbdkr-fktyp NE 'P' AND vbdpr-fareg NA '45' ).
+      PERFORM item_billing_correction_header USING da_ganf da_lanf.
+      IF tvbdpr-uecha EQ vbdpr-posnr OR
+         tvbdpr-uecha IS INITIAL.
+        PERFORM get_item_prices.
+        PERFORM get_item_characteristics.
+        PERFORM customer_details.
+        CALL FUNCTION 'CONTROL_FORM'
+          EXPORTING
+            command = 'PROTECT'.
+*        CALL FUNCTION 'WRITE_FORM'
+*          EXPORTING
+*            element = 'ITEM_LINE'.
+        IF tvbdpr-charg NE space.
+          CALL FUNCTION 'WRITE_FORM'
+            EXPORTING
+              element = 'ITEM_LINE_BATCH'
+            EXCEPTIONS
+              OTHERS  = 1.
+          IF sy-subrc NE 0.
+            PERFORM protocol_update.
+          ENDIF.
+        ENDIF.
+        PERFORM item_price_print.
+*        PERFORM REPEAT_COPY.
+        PERFORM item_characteristics_print.
+        PERFORM item_reference_billing.
+        CALL FUNCTION 'CONTROL_FORM'
+          EXPORTING
+            command = 'ENDPROTECT'.
+        PERFORM item_text_print.
+        PERFORM different_consignee.
+        PERFORM different_order_no.
+        PERFORM different_delivery_no.
+        PERFORM different_extern_no.
+        PERFORM different_purchase_order_no.
+        PERFORM different_reference_no.
+      ELSE.
+        IF NOT tvbdpr-fkimg IS INITIAL.
+          PERFORM get_item_prices.
+          CALL FUNCTION 'WRITE_FORM'
+            EXPORTING
+              element = 'ITEM_LINE_BATCH'
+            EXCEPTIONS
+              OTHERS  = 1.
+          IF sy-subrc NE 0.
+            PERFORM protocol_update.
+          ENDIF.
+          PERFORM item_price_print.
+        ENDIF.
+      ENDIF.
+*   IF NOT VBDPR-PREFE IS INITIAL.
+*     CALL FUNCTION 'WRITE_FORM'
+*          EXPORTING
+*               ELEMENT = 'PREFERENCE_TEXT'
+*          EXCEPTIONS
+*               OTHERS  = 1.
+*     IF SY-SUBRC NE 0.
+*       PERFORM PROTOCOL_UPDATE.
+*     ENDIF.
+*   ENDIF.
+*ENHANCEMENT-POINT ITEM_PRINT_01 SPOTS ES_RVADIN01.
+    ENDIF.
+
+    IF vbdkr-fktyp NE 'P'.
+      IF vbdpr-fareg CA '45'.
+        PERFORM get_downpayment_data.
+      ENDIF.
+    ENDIF.
+    PERFORM ITEM_DISC_DETAILS.
+  ENDLOOP.
+
+  PERFORM ITEM_TAX_DETAILS.
+
+  CALL FUNCTION 'WRITE_FORM'           "Deactivate Header
+       EXPORTING  element  = 'ITEM_HEADER'
+                  function = 'DELETE'
+                  type     = 'TOP'
+       EXCEPTIONS OTHERS   = 1.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                    "ITEM_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_TEXT_PRINT                                          *
+*---------------------------------------------------------------------*
+*       Printout of the item texts                                    *
+*---------------------------------------------------------------------*
+
+FORM item_text_print.
+*  DATA : u_price LIKE vbdpr-netwr.
+  DATA : v_netwr LIKE vbdpr-netwr.
+  DATA : v_fkimg TYPE vbdpr-fkimg.
+  DATA : v_KBETR TYPE P DECIMALS 2.
+  DATA : l_gross(10).
+  DATA : l_pack(10).
+  DATA : l_split1(10).
+  DATA : l_split2(10).
+  DATA : L_MEINH        TYPE MARM-MEINH,
+         L_UMREZ        TYPE MARM-UMREZ,
+         L_MEINS        TYPE MARA-MEINS,
+         L_MATERIAL(18) TYPE N,
+         L_MATNR        TYPE MARA-MATNR,
+         L_FKIMG        TYPE FKIMG,
+         L_EACH         TYPE FKIMG,
+         L_EACH_1(15),
+         L_CARTONS(15),
+*         L_SPLIT1(15),
+         L_TEMP(15).
+*         L_SPLIT2(15).
+
+*  u_price = vbdkr-netwr / vbdpr-fkimg.
+
+
+* To Print Delivery Date and Delivery No.
+*  SELECT SINGLE vbeln FROM lips
+*                      INTO lips-vbeln
+*                      WHERE vgbel = vbdpr-vgbel
+*                      AND   vgpos = vbdpr-vgpos.
+  SELECT SINGLE vbeln FROM lips
+                      INTO lips-vbeln
+                      WHERE vbeln = vbdpr-vgbel
+                      AND   posnr = vbdpr-vgpos.
+
+  IF sy-subrc = 0.
+    SELECT SINGLE wadat_ist
+                  vbeln     FROM  likp
+                            INTO  (likp-wadat_ist, likp-vbeln)
+                            WHERE vbeln = lips-vbeln.
+*    IF sy-subrc = 0.
+*
+*      CLEAR : v_netwr,
+*              v_fkimg.
+*      v_netwr = TVBDPR-netwr.
+*      v_fkimg = TVBDPR-fkimg.
+*      u_price = v_netwr / v_fkimg.
+*    ENDIF.
+  ENDIF.
+
+*  G_NETWR1 = vbdpr-netwr.
+
+  READ TABLE tkomv WITH KEY KPOSN = tvbdpr-POSNR
+                            KSCHL = 'ZDNP'.
+  IF sy-subrc = 0.
+    G_NETWR1 = tkomv-KWERT.
+  ENDIF.
+
+  READ TABLE tkomv WITH KEY KPOSN = tvbdpr-POSNR
+                            KSCHL = 'J1AU'.
+  if sy-subrc = 0.
+    V_KBETR = TKOMV-KBETR / 10.
+    G_LIN_VAT = V_KBETR.
+  ENDIF.
+*    G_NETWR1 = G_NETWR1 - tkomv-KWERT.
+**    G_NETPR  = GS_IT_PRICE_WA-KZWI1.
+**    G_AMOUNT = G_AMOUNT + G_NETPR.
+  u_price = G_NETWR1 / vbdpr-fkimg.
+  G_TOT_PACKS = G_TOT_PACKS + vbdpr-fkimg.
+  G_QTY_TOT = G_QTY_TOT + tvbdpr-volum.
+  G_TOTAL = G_TOTAL + G_NETWR1.
+*  else.
+*    G_NETWR1 = vbdpr-netwr.
+**    G_NETPR  = GS_IT_PRICE_WA-KZWI1.
+**    G_AMOUNT = G_AMOUNT + G_NETPR.
+*    u_price = G_NETWR1 / vbdpr-fkimg.
+*    G_TOTAL = G_TOTAL + G_NETWR1.
+*  endif.
+*  ENDIF.
+*********
+*  CLEAR: G_CART.
+*
+*  CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+*    EXPORTING
+*      INPUT          = tvbdpr-MEINS
+*      LANGUAGE       = SY-LANGU
+*    IMPORTING
+*      OUTPUT         = L_MEINS
+*    EXCEPTIONS
+*      UNIT_NOT_FOUND = 1
+*      OTHERS         = 2.
+*
+*  IF tvbdpr-MATNR CO '0123456789 '.
+*    L_MATERIAL = tvbdpr-MATNR.
+*    L_MATNR    = L_MATERIAL.
+*  ELSE.
+*    L_MATNR    = tvbdpr-MATNR.
+*  ENDIF.
+*
+*  SELECT SINGLE MEINH UMREZ FROM MARM
+*                            INTO (L_MEINH,L_UMREZ)
+*                           WHERE MATNR =  L_MATNR
+*                             AND MEINH NE L_MEINS."GS_IT_GEN-BASE_UOM.
+*
+*  IF SY-SUBRC = 0 .
+*    L_FKIMG   = tvbdpr-FKIMG / L_UMREZ .
+*    L_CARTONS = L_FKIMG.
+*    SPLIT L_CARTONS AT '.' INTO L_SPLIT1 L_SPLIT2.
+*    L_TEMP = L_SPLIT1.
+*    CONDENSE L_TEMP NO-GAPS.
+*    G_CART = L_TEMP.
+*  ENDIF.
+*********
+*-------->Debit/ Credit Memo
+  IF vbrk-fkart = 'G2' OR vbrk-fkart = 'L2'.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'ITEM_LINE'
+        window  = 'MAIN'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+*-------->Credit for Returns
+  ELSEIF vbrk-fkart = 'RE'.
+*To Get the Pack Size (Gross Wt/No Of Qty).
+    if not tvbdpr-volum is initial.
+      L_GROSS = tvbdpr-volum / tvbdpr-FKIMG.
+    else.
+      L_GROSS = tvbdpr-brgew / tvbdpr-FKIMG.
+    endif.
+    L_PACK = L_GROSS.
+
+    SPLIT L_PACK AT '.' INTO L_SPLIT1 L_SPLIT2.
+    IF L_SPLIT2 CO '0 '.
+      L_PACK = L_SPLIT1.
+    ENDIF.
+
+    CONDENSE L_PACK NO-GAPS.
+    if not tvbdpr-volum is initial.
+      CONCATENATE L_PACK tvbdpr-VOLEH INTO G_PACK_SIZE
+                                          SEPARATED BY SPACE.
+    else.
+      CONCATENATE L_PACK tvbdpr-GEWEI INTO G_PACK_SIZE
+                                          SEPARATED BY SPACE.
+    endif.
+    CLEAR: L_PACK, L_SPLIT1,L_SPLIT2.
+
+    CLEAR: G_CART.
+
+    CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+      EXPORTING
+        INPUT          = tvbdpr-MEINS
+        LANGUAGE       = SY-LANGU
+      IMPORTING
+        OUTPUT         = L_MEINS
+      EXCEPTIONS
+        UNIT_NOT_FOUND = 1
+        OTHERS         = 2.
+
+    IF tvbdpr-MATNR CO '0123456789 '.
+      L_MATERIAL = tvbdpr-MATNR.
+      L_MATNR    = L_MATERIAL.
+    ELSE.
+      L_MATNR    = tvbdpr-MATNR.
+    ENDIF.
+
+    SELECT SINGLE MEINH UMREZ FROM MARM
+                              INTO (L_MEINH,L_UMREZ)
+                             WHERE MATNR =  L_MATNR
+                               AND MEINH NE L_MEINS."GS_IT_GEN-BASE_UOM.
+
+    IF SY-SUBRC = 0 .
+      L_FKIMG   = tvbdpr-FKIMG / L_UMREZ .
+      L_CARTONS = L_FKIMG.
+      SPLIT L_CARTONS AT '.' INTO L_SPLIT1 L_SPLIT2.
+      L_TEMP = L_SPLIT1.
+      CONDENSE L_TEMP NO-GAPS.
+      G_CART = L_TEMP.
+
+* To Calculate Packets.
+      L_EACH   = tvbdpr-FKIMG - ( L_UMREZ * G_CART ).
+      L_EACH_1 = L_EACH.
+      SPLIT L_EACH_1 AT '.' INTO L_SPLIT1 L_SPLIT2.
+      G_TINS = G_TINS + L_SPLIT1.
+
+* To Update Packet Summary.
+      CASE L_MEINH.
+        WHEN 'KAR'.              "CARTON
+          G_CARTONS = G_CARTONS + G_CART.
+        WHEN 'DR'.               "DRUM
+          G_DRUM = G_DRUM +  G_CART.
+        WHEN 'BAG'.              "BAG
+          G_BAG = G_BAG + G_CART.
+        WHEN 'KAN'.              "CAN
+          G_CAN = G_CAN + G_CART.
+        WHEN 'BBL'.              "BARREL
+          G_BARREL = G_BARREL + G_CART.
+        WHEN 'BKT'.              "BUCKETS
+          G_BUCKET = G_BUCKET + G_CART.
+        WHEN 'TIN'.              "TINS
+          G_TINS   = G_TINS + G_CART.
+        WHEN 'PCH'.              "POUCHES
+          G_PCH    = G_PCH + G_CART.
+      ENDCASE.
+    ELSE.
+      G_TINS = G_TINS + tvbdpr-FKIMG.
+    ENDIF.
+
+    CLEAR: L_CARTONS,
+           L_FKIMG.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'ITEM_LINE_RE'
+        window  = 'MAIN'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+    PERFORM PACKAGE_SUMMARY.
+  ENDIF.
+  CLEAR lips-vbeln.
+
+* To print Amount in Numbers into Words
+  L_AMOUNT = VBDKR-NETWR.
+
+*  CALL FUNCTION 'HR_IN_CHG_INR_WRDS'
+*    EXPORTING
+*      AMT_IN_NUM         = G_GR_TOTAL
+*    IMPORTING
+*      AMT_IN_WORDS       = G_WORDS
+*    EXCEPTIONS
+*      DATA_TYPE_MISMATCH = 1
+*      OTHERS             = 2.
+*
+*  CONCATENATE G_WORDS ' Only' into G_WORDS.
+*
+*  CALL FUNCTION 'WRITE_FORM'
+*    EXPORTING
+*      element = 'AMOUNT_IN_WORDS'
+*      window  = 'AMT_WRDS'
+*    EXCEPTIONS
+*      element = 1
+*      window  = 2.
+*  IF sy-subrc NE 0.
+*    PERFORM protocol_update.
+*  ENDIF.
+ENDFORM.                    "ITEM_TEXT_PRINT
+
+*---------------------------------------------------------------------*
+*       FORM PROTOCOL_UPDATE                                          *
+*---------------------------------------------------------------------*
+*       The messages are collected for the processing protocol.       *
+*---------------------------------------------------------------------*
+
+FORM protocol_update.
+
+  CHECK xscreen = space.
+  CALL FUNCTION 'NAST_PROTOCOL_UPDATE'
+    EXPORTING
+      msg_arbgb = syst-msgid
+      msg_nr    = syst-msgno
+      msg_ty    = syst-msgty
+      msg_v1    = syst-msgv1
+      msg_v2    = syst-msgv2
+      msg_v3    = syst-msgv3
+      msg_v4    = syst-msgv4
+    EXCEPTIONS
+      OTHERS    = 1.
+
+ENDFORM.                    "PROTOCOL_UPDATE
+*---------------------------------------------------------------------*
+*       FORM PROTOCOL_UPDATE_SPOOL                                    *
+*---------------------------------------------------------------------*
+*       The messages are collected for the processing protocol.       *
+*---------------------------------------------------------------------*
+
+FORM protocol_update_spool USING syst-msgno h_i_itcpp-tdspoolid
+                                 syst-msgv2 syst-msgv3 syst-msgv4.
+  syst-msgid = 'VN'.
+  syst-msgv1 = h_i_itcpp-tdspoolid.
+  CONDENSE syst-msgv1.
+  CHECK xscreen = space.
+  CALL FUNCTION 'NAST_PROTOCOL_UPDATE'
+    EXPORTING
+      msg_arbgb = syst-msgid
+      msg_nr    = syst-msgno
+      msg_ty    = syst-msgty
+      msg_v1    = syst-msgv1
+      msg_v2    = syst-msgv2
+      msg_v3    = syst-msgv3
+      msg_v4    = syst-msgv4
+    EXCEPTIONS
+      OTHERS    = 1.
+
+ENDFORM.                    "PROTOCOL_UPDATE_SPOOL
+
+*---------------------------------------------------------------------*
+*       FORM SENDER                                                   *
+*---------------------------------------------------------------------*
+*       This routine determines the address of the sender (Table VKO) *
+*---------------------------------------------------------------------*
+
+FORM sender.
+
+*  SELECT SINGLE * FROM tvko  WHERE vkorg = vbdkr-vkorg.
+
+* To Fetch Customer Address
+  SELECT SINGLE adrnr
+                stceg FROM kna1
+                      INTO (kna1-adrnr, g_b_vat)
+                      WHERE kunnr = vbdkr-kunag.
+*   g_b_vat = kna1-stceg.
+  IF sy-subrc NE 0.
+    syst-msgid = 'VN'.
+    syst-msgno = '203'.
+    syst-msgty = 'E'.
+    syst-msgv1 = 'TVKO'.
+    syst-msgv2 = syst-subrc.
+    PERFORM protocol_update.
+    EXIT.
+  ENDIF.
+  CLEAR gv_fb_addr_get_selection.
+  gv_fb_addr_get_selection-addrnumber = kna1-adrnr.
+*  CALL FUNCTION 'ADDR_GET'
+*    EXPORTING
+*      address_selection = gv_fb_addr_get_selection
+*      address_group     = 'CA01'
+*    IMPORTING
+*      sadr              = sadr
+*    EXCEPTIONS
+*      OTHERS            = 01.                               "SADR40A
+
+  p_adrnr2 = kna1-adrnr.
+  CALL FUNCTION 'ADDRESS_INTO_PRINTFORM'
+   EXPORTING
+     ADDRESS_TYPE                         = '1'
+     ADDRESS_NUMBER                       = p_adrnr2
+     NUMBER_OF_LINES                      = 7
+*   STREET_HAS_PRIORITY                  = ' '
+*   LINE_PRIORITY                        = ' '
+*   COUNTRY_NAME_IN_RECEIVER_LANGU       = ' '
+*   LANGUAGE_FOR_COUNTRY_NAME            = ' '
+*   NO_UPPER_CASE_FOR_CITY               = ' '
+*   IV_NATION                            = ' '
+*   IV_NATION_SPACE                      = ' '
+*   IV_PERSON_ABOVE_ORGANIZATION         = ' '
+*   IS_BUPA_TIME_DEPENDENCY              = ' '
+*   IV_LANGU_CREA                        = ' '
+   IMPORTING
+     ADDRESS_PRINTFORM                    = G_ADRS_PRINT2.
+
+  IF sy-subrc NE 0.
+    CLEAR sadr.
+  ENDIF.
+* To Fetch Country Code
+  SELECT SINGLE landx FROM t005t
+                INTO t005t-landx
+                WHERE spras = sadr-spras
+                AND   land1 = sadr-land1.
+
+  vbdkr-sland = sadr-land1.
+  IF sy-subrc NE 0.
+    syst-msgid = 'VN'.
+    syst-msgno = '203'.
+    syst-msgty = 'E'.
+    syst-msgv1 = 'SADR'.
+    syst-msgv2 = syst-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+
+  SELECT SINGLE J_1ICSTNO INTO G_b_CST FROM J_1IMOCUST
+                          WHERE KUNNR = vbdkr-kunag.
+** Interne Verrechnung: Adresse des Buchungskreises lesen
+*  IF vbdkr-vbtyp CA '56'.
+*    CLEAR t001g.
+*    SELECT SINGLE * FROM t001g WHERE bukrs = vbdkr-bukrs
+*                                 AND programm EQ sy-repid
+*                                 AND txtid EQ 'SD'.
+*  ENDIF.
+
+  PERFORM bill_to.                           " Bill to party
+
+ENDFORM.                    "SENDER
+
+*&---------------------------------------------------------------------*
+*&      Form  HEADER_CONSGNEE
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM header_consgnee.
+
+  IF vbdkr-name1 NE vbdkr-name1_we OR
+     vbdkr-name2 NE vbdkr-name2_we OR
+     vbdkr-name3 NE vbdkr-name3_we OR
+     vbdkr-name4 NE vbdkr-name4_we   .
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'HEADER_CONSGNEE'
+        window  = 'CONSGNEE'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'HEADER_CONSGNEE'
+        window  = 'INFO1'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+  ENDIF.
+ENDFORM.                               " HEADER_CONSGNEE
+*&---------------------------------------------------------------------*
+*&      Form  DIFFERENT_REFERENCE_NO
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM different_reference_no.
+
+  CHECK vbdkr-vbtyp CA 'OP'.
+  CHECK vbdkr-vbeln_vg2 NE vbdpr-vbeln_vg2.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_REFERENCE_NO'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " DIFFERENT_REFERENCE_NO
+*&---------------------------------------------------------------------*
+*&      Form  HEADER_DATA_PRINT
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM header_data_print.
+  data : l_flag  TYPE c.
+  data : l_flag1 TYPE c.
+  data : l_flag2 TYPE c.
+*Fetch the Description  from the tvarv table
+  SELECT SINGLE fkart FROM vbrk
+                      INTO vbrk-fkart
+                     WHERE vbeln = VBDKR-VBELN.
+
+  IF vbrk-fkart = 'G2'.
+    SELECT SINGLE low FROM tvarv
+                      INTO tvarv-low
+                     WHERE name = 'ZCREDITMEMO'.
+    l_flag1 = 'X'.
+    SELECT SINGLE low FROM tvarvc
+                  INTO tvarvc-low
+                 WHERE name = 'ZNPI_VAT'.
+  ELSEIF vbrk-fkart = 'L2'.
+    SELECT SINGLE low FROM tvarv
+                      INTO tvarv-low
+                     WHERE name = 'ZDEBITMEMO'.
+    l_flag = 'X'.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'DMR'
+        window  = 'ORDER_NO'.
+*ELSE.
+    SELECT SINGLE low FROM tvarvc
+                      INTO tvarvc-low
+                     WHERE name = 'ZNPI_VAT'.
+  ELSEIF vbrk-fkart = 'RE'.
+    SELECT SINGLE low FROM tvarv
+                      INTO tvarv-low
+                     WHERE name = 'ZCREDITFORRETURNS'.
+    l_flag2 = 'X'.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'RFCR'
+        window  = 'ORDER_NO'.
+
+    SELECT SINGLE low FROM tvarvc
+                      INTO tvarvc-low
+                     WHERE name = 'ZNPI_VAT'.
+  ENDIF.
+
+* Display Details of Document (Credit Memo Number and Date)
+  IF l_flag NE 'X' AND l_flag1 EQ 'X' AND l_flag2 NE 'X'.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'CREDIT'
+*        window  = 'INFO'
+        window  = 'HDR_TOP'
+
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'CREDIT'
+        window  = 'INFO'
+*        window  = 'HDR_TOP'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+* Display Details of Document (Debit Memo Number and Date)
+  ELSEIF l_flag EQ 'X' AND l_flag1 NE 'X' AND l_flag2 NE 'X'.
+    CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DEBIT'
+      window  = 'INFO'
+*        window  = 'HDR_TOP'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'DEBIT'
+*        window  = 'INFO'
+        window  = 'HDR_TOP'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+* Display Details of Document (Credit for Return Number and Date)
+  ELSEIF l_flag2 EQ 'X' AND l_flag1 NE 'X' AND l_flag NE 'X'.
+    CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'REFORCR'
+      window  = 'INFO'
+*        window  = 'HDR_TOP'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'REFORCR'
+*        window  = 'INFO'
+        window  = 'HDR_TOP'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+  ENDIF.
+
+
+**************************************************************
+*  IF VBDKR-vbtyp = 'C'.
+**    SELECT SINGLE low FROM tvarv
+**                      INTO tvarv-low
+**                     WHERE name = 'ZORDERTITLE'.
+**  ELSEIF VBDKR-vbtyp = 'B'.
+**    SELECT SINGLE low FROM tvarv
+**                      INTO tvarv-low
+**                     WHERE name = 'ZQUOTATION'.
+**  ELSEIF VBDKR-vbtyp = 'G'.
+**    SELECT SINGLE low FROM tvarv
+**                      INTO tvarv-low
+**                     WHERE name = 'ZCONTRACT'.
+*  ELSEIF VBDKR-vbtyp = 'M'.
+*    SELECT SINGLE low FROM tvarv
+*                      INTO tvarv-low
+*                     WHERE name = 'ZCREDITMEMO'.
+*  ELSEIF VBDKR-vbtyp = 'O'.
+*    SELECT SINGLE low FROM tvarv
+*                      INTO tvarv-low
+*                     WHERE name = 'ZCREDITMEMO'.
+*  ELSEIF VBDKR-vbtyp = 'P'.
+*    SELECT SINGLE low FROM tvarv
+*                      INTO tvarv-low
+*                     WHERE name = 'ZDEBITMEMO'.
+**  ELSEIF VBDKR-vbtyp = 'H'.
+**    SELECT SINGLE low FROM tvarv
+**                      INTO tvarv-low
+**                     WHERE name = 'ZRETURNORDER'.
+*  ENDIF.
+******************************************************************
+
+**Fetch the Description  from the tvarv table
+*  SELECT SINGLE low FROM tvarv
+*                    INTO tvarv-low
+*                    WHERE name =  'ZCREDITMEMO'.
+******************************************************************
+*Determine First print or copy of Document
+  IF v_flag NE 'X'.
+    v_flag = 'X'.
+  ELSE.
+    PERFORM repeat_copy.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'HEADER_DATA'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " HEADER_DATA_PRINT
+*&---------------------------------------------------------------------*
+*&      Form  GET_DATA_ESR
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM get_data_esr.
+
+  CALL FUNCTION 'SD_ESR_GET_DATA'
+    EXPORTING
+      vbdkr_bukrs                   = vbdkr-bukrs
+      vbdkr_vkorg                   = vbdkr-vkorg
+      komk_fkwrt                    = komk-fkwrt
+      vbdkr_vbeln                   = vbdkr-vbeln
+      vbdkr_kunrg                   = vbdkr-kunrg
+      vbdkr_waerk                   = vbdkr-waerk
+    CHANGING
+      ivbdre                        = vbdre
+    EXCEPTIONS
+      t049e_no_entry                = 1
+      t001_no_entry                 = 2
+      bnka_no_entry                 = 3
+      sadr_no_entry                 = 4
+      fkwrt_not_valid               = 5
+      esr_digits_to_check_not_valid = 6
+      esr_check_method_not_valid    = 7
+      OTHERS                        = 8.
+
+  IF sy-subrc NE 0.
+    retcode = sy-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " GET_DATA_ESR
+
+*----------------------------------------------------------------------*
+*       Form  GET_DATA_ITALY
+*----------------------------------------------------------------------*
+*                                                                      *
+*----------------------------------------------------------------------*
+
+FORM get_data_italy USING proc_screen.
+
+  CLEAR konh.
+  CLEAR tlic.
+  LOOP AT tkomv WHERE koaid = 'D'
+                AND   kntyp ='+'.
+    SELECT SINGLE * FROM konh WHERE knumh = tkomv-knumh.
+    IF sy-subrc EQ 0.
+      IF NOT konh-licno IS INITIAL AND NOT konh-licdt IS INITIAL.
+        SELECT SINGLE * FROM tlic WHERE licno  = konh-licno
+                                  AND   kunnr  = vbdkr-kunag.
+        IF sy-subrc NE 0.
+* Alte TLIC-Sätze haben KUNNR initial. Alter Satz vorhanden ?
+          DATA: da_kunnr_initial LIKE vbdkr-kunag.
+          CLEAR da_kunnr_initial.
+          SELECT SINGLE * FROM tlic WHERE licno = konh-licno
+                                    AND   kunnr = da_kunnr_initial.
+        ENDIF.
+        IF sy-subrc EQ 0.
+          IF NOT tlic-prnum_nr IS INITIAL AND
+             NOT tlic-prnum_dt IS INITIAL.
+            MOVE:
+              konh-licno TO vbdkr-licno,
+              konh-licdt TO vbdkr-licdt.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+    IF vbdkr-licno     IS INITIAL OR
+       vbdkr-licdt     IS INITIAL OR
+       tlic-prnum_nr   IS INITIAL OR
+       tlic-prnum_dt   IS INITIAL.
+      IF proc_screen = space.
+        retcode = 3.
+        syst-msgno = '205'.
+        syst-msgid = 'VN'.
+        syst-msgty = 'I'.
+        PERFORM protocol_update.
+      ELSE.
+        MESSAGE i205.
+      ENDIF.
+    ENDIF.
+    EXIT.
+  ENDLOOP.
+ENDFORM.                               " get_data_italy
+
+*&---------------------------------------------------------------------*
+*&      Form  START_FORM
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM start_form.
+
+  DATA : startseite(8) VALUE 'FIRSTBSR'.
+  DATA : sprache LIKE sy-langu.
+
+  IF vbdre-verfa = '04' OR vbdre-verfa = '08'.
+
+    CALL FUNCTION 'START_FORM'
+      EXPORTING
+        archive_index = toa_dara
+        startpage     = startseite
+      IMPORTING
+        language      = sprache
+      EXCEPTIONS
+        form          = 1
+        format        = 2
+        unended       = 3
+        unopened      = 4
+        unused        = 5
+        OTHERS        = 6.
+    IF sy-subrc NE 0.
+      retcode = sy-subrc.
+      PERFORM protocol_update.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.                               " START_OPEN
+*&---------------------------------------------------------------------*
+*&      Form  TAX_TEXT_PRINT
+*&---------------------------------------------------------------------*
+*       text                                                           *
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM tax_text_print.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'TAX_TEXT'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " TAX_TEXT_PRINT
+
+***********************************************************************
+*                SUBROUTINES OF ENTRY_CH                              *
+***********************************************************************
+
+FORM header_ch.
+  CLEAR print_local_curr_ch.
+  REFRESH komvdk_ch.
+* Hauswährung <> Belegwährung ?
+  SELECT SINGLE * FROM t001 WHERE bukrs EQ vbdkr-bukrs.
+  CHECK sy-subrc = 0.
+  CHECK t001-waers <> vbdkr-waerk.
+  MOVE 'X' TO print_local_curr_ch.
+  LOOP AT hkomvd WHERE koaid = 'D'.
+    CLEAR komvdk_ch.
+    CALL FUNCTION 'CONVERT_TO_LOCAL_CURRENCY'
+      EXPORTING
+        date             = vbdkr-fkdat
+        foreign_amount   = hkomvd-kwert
+        foreign_currency = vbdkr-waerk
+        local_currency   = t001-waers
+        rate             = vbdkr-kurrf
+      IMPORTING
+        local_amount     = komvdk_ch-kwert
+      EXCEPTIONS
+        no_rate_found    = 1
+        overflow         = 2
+        no_factors_found = 3
+        no_spread_found  = 4
+        OTHERS           = 5.
+    CHECK sy-subrc = 0.
+    MOVE: t001-waers TO komvdk_ch-awein,
+          t001-waers TO komvdk_ch-awei1,
+          hkomvd-vtext TO komvdk_ch-vtext,
+          vbdkr-kurrf TO hkomvd-kkurs.
+    APPEND komvdk_ch.
+  ENDLOOP.
+ENDFORM.                    "HEADER_CH
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_CH                                                  *
+*---------------------------------------------------------------------*
+*       ........                                                      *
+*---------------------------------------------------------------------*
+FORM item_ch.
+  CHECK print_local_curr_ch EQ 'X'.
+  REFRESH komvdp_ch.
+* Suche die Steuerkonditionen der Position und rechne Hauswährung aus.
+  LOOP AT tkomvd WHERE koaid = 'D'.
+    CLEAR komvdp_ch.
+    CALL FUNCTION 'CONVERT_TO_LOCAL_CURRENCY'
+      EXPORTING
+        date             = vbdkr-fkdat
+        foreign_amount   = tkomvd-kwert
+        foreign_currency = vbdkr-waerk
+        local_currency   = t001-waers
+        rate             = vbdkr-kurrf
+      IMPORTING
+        local_amount     = komvdp_ch-kwert
+      EXCEPTIONS
+        no_rate_found    = 1
+        overflow         = 2
+        no_factors_found = 3
+        no_spread_found  = 4
+        OTHERS           = 5.
+    CHECK sy-subrc = 0.
+    MOVE: t001-waers TO komvdp_ch-awein,
+          t001-waers TO komvdp_ch-awei1,
+          tkomvd-vtext TO komvdp_ch-vtext,
+          vbdkr-kurrf TO komvdp_ch-kkurs.
+    APPEND komvdp_ch.
+  ENDLOOP.
+ENDFORM.                    "ITEM_CH
+
+*---------------------------------------------------------------------*
+*       FORM ITEM_PRINT_CH                                            *
+*---------------------------------------------------------------------*
+*       ........                                                      *
+*---------------------------------------------------------------------*
+FORM item_print_ch.
+  DATA: save_waerk_fw LIKE komk-waerk.
+  save_waerk_fw = komk-waerk.
+  LOOP AT komvdp_ch.
+    komvd = komvdp_ch.
+    komk-waerk = komvd-awein.
+    IF print_mwskz EQ space.
+      CLEAR komvd-mwskz.
+    ENDIF.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'ITEM_LINE_TAX_HAUSWAEHRUNG'.
+  ENDLOOP.
+  komk-waerk = save_waerk_fw.
+ENDFORM.                    "ITEM_PRINT_CH
+
+*---------------------------------------------------------------------*
+*       FORM HEADER_PRINT_CH                                          *
+*---------------------------------------------------------------------*
+*       ........                                                      *
+*---------------------------------------------------------------------*
+FORM header_print_ch.
+  DATA: save_waerk_fw LIKE komk-waerk.
+  save_waerk_fw = komk-waerk.
+  LOOP AT komvdk_ch.
+    komvd = komvdk_ch.
+    komk-waerk = komvd-awein.
+    IF print_mwskz = space.
+      CLEAR komvd-mwskz.
+    ENDIF.
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'SUM_LINE_TAX_HAUSWAEHRUNG'.
+  ENDLOOP.
+  komk-waerk = save_waerk_fw.
+ENDFORM.                    "HEADER_PRINT_CH
+***********************************************************************
+*       CUSTOMER SUBROUTINES                                          *
+***********************************************************************
+*&---------------------------------------------------------------------*
+*&      Form  ITEM_BILLING_CORRECTION_HEADER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_DA_GANF  text                                              *
+*      -->P_DA_LANF  text                                              *
+*----------------------------------------------------------------------*
+FORM item_billing_correction_header USING    us_ganf
+                                             us_lanf.
+  CHECK : vbdkr-knuma IS INITIAL.
+  IF vbdpr-autyp = 'K'.
+*   Gutschriftsanforderung
+    IF vbdpr-shkzg = 'X'.
+      IF us_ganf IS INITIAL.
+        MOVE 'X'   TO us_ganf.
+        MOVE space TO us_lanf.
+
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'CORRECTION_TEXT_K'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ELSE.
+      IF us_lanf IS INITIAL.
+        MOVE 'X'   TO us_lanf.
+        MOVE space TO us_ganf.
+
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'CORRECTION_TEXT_L'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+  IF vbdpr-autyp = 'L'.
+*   Lastschriftsanforderung
+    IF vbdpr-shkzg = space.
+      IF us_lanf IS INITIAL.
+        MOVE 'X'   TO us_lanf.
+        MOVE space TO us_ganf.
+
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'CORRECTION_TEXT_L'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ELSE.
+      IF us_ganf IS INITIAL.
+        MOVE 'X'   TO us_ganf.
+        MOVE space TO us_lanf.
+
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'CORRECTION_TEXT_K'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                               " ITEM_BILLING_CORRECTION_HEADER
+*&---------------------------------------------------------------------*
+*&      Form  ITEM_REFERENCE_BILLING
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM item_reference_billing.
+
+  CHECK vbdpr-vbklt EQ 'D'.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'ITEM_REFERENCE_BILLING'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+
+ENDFORM.                               " ITEM_REFERENCE_BILLING
+*&---------------------------------------------------------------------*
+*&      Form  DOWNPAYMENT_INFO
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM downpayment_value.
+  CHECK NOT vbdkr-dpval IS INITIAL.
+  vbdkr-dpend = komk-fkwrt.
+  SUBTRACT vbdkr-dpval FROM vbdkr-dpend.
+  vbdkr-dpmws_end = vbdkr-mwsbk - vbdkr-dpmws.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'DOWNPAYMENT_VALUE'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+ENDFORM.                               " DOWNPAYMENT_INFO
+
+*&---------------------------------------------------------------------*
+*&      Form  PAYMENTCARD_VALUES
+*&---------------------------------------------------------------------*
+*       Print Payment Cards
+*----------------------------------------------------------------------*
+*  -->  VBDKR Header
+*----------------------------------------------------------------------*
+FORM paymentcard_values.
+
+  DATA: da_xfplt LIKE fpltvb OCCURS 2 WITH HEADER LINE. " Cards
+
+  IF NOT vbdkr-rplnr IS INITIAL.
+* Read from the Database
+    CALL FUNCTION 'BILLING_SCHEDULE_READ'
+      EXPORTING
+        fplnr         = vbdkr-rplnr
+      TABLES
+        zfplt         = da_xfplt
+      EXCEPTIONS
+        error_message = 0
+        OTHERS        = 0.
+* Loop at Cards
+    LOOP AT da_xfplt.
+      MOVE-CORRESPONDING da_xfplt TO fpltvb.
+* Get text
+      IF da_xfplt-ccins NE tvcint-ccins.
+        SELECT SINGLE * FROM tvcint
+               WHERE spras = vbco3-spras
+               AND   ccins = da_xfplt-ccins.
+        IF sy-subrc =  0.
+          ccname = tvcint-vtext.
+        ELSE.
+          ccname = da_xfplt-ccins.
+        ENDIF.
+      ENDIF.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'PAYMENTCARDS'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+      ADD da_xfplt-fakwr TO vbdkr-ccval.
+    ENDLOOP.
+    IF da_xfplt-fakwr NE vbdkr-ccval.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'PAYMENTCARD_SUM'
+        EXCEPTIONS
+          element = 1
+          window  = 2.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+ENDFORM.                       "PAYMENTCARD_VALUES
+*&---------------------------------------------------------------------*
+*&      Form  GET_DOWNPAYMENT_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM get_downpayment_data .
+*     Lesen der für die Kundenfaktura zu verrechnenden Anzahlung.
+
+*     Can there be a head office?
+  CASE vbdkr-xfilkd.
+*       Ordering party
+    WHEN chara.
+      IF vbdkr-knkli IS INITIAL OR
+         vbdkr-knkli EQ vbdkr-kunag.
+        da_xfilkd = vbdkr-xfilkd.
+      ENDIF.
+*       Payer
+    WHEN charb.
+      da_xfilkd = vbdkr-xfilkd.
+  ENDCASE.
+
+*     Setzen der Belegnummer
+  IF NOT vbdpr-vbelv IS INITIAL AND vbdpr-kzvbr = 'E'.
+    gt_sdaccdpc_doc-vbeln = vbdpr-vbelv.
+    gt_sdaccdpc_doc-posnr = vbdpr-posnv.
+  ELSE.
+    gt_sdaccdpc_doc-vbeln = vbdpr-vbeln_vauf.
+    gt_sdaccdpc_doc-posnr = vbdpr-posnr_vauf.
+  ENDIF.
+  APPEND gt_sdaccdpc_doc.
+
+  CALL FUNCTION 'SD_DOWNPAYMENT_READ'
+    EXPORTING
+      i_waerk           = vbdkr-waerk
+      i_bukrs           = vbdkr-bukrs
+      i_kunnr           = vbdkr-kunrg
+      i_vbel2           = gt_sdaccdpc_doc-vbeln
+      i_vbeln           = vbdkr-vbeln
+      i_sfakn           = vbdkr-sfakn
+      i_xfilkd          = da_xfilkd
+      i_gesanz          = 'X'
+    TABLES
+      t_sdaccdpc        = ixsdaccdpc
+    CHANGING
+      c_downpay_refresh = downpay_refresh
+    EXCEPTIONS
+      no_downpayments   = 1
+      in_downpayments   = 2
+      OTHERS            = 3.
+ENDFORM.                    " GET_DOWNPAYMENT_DATA
+*&---------------------------------------------------------------------*
+*&      Form  DOWNPAYMENTS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM downpayments .
+  SORT gt_sdaccdpc_doc BY vbeln posnr.
+  DELETE ADJACENT DUPLICATES FROM gt_sdaccdpc_doc.
+
+  LOOP AT ixsdaccdpc.
+    READ TABLE gt_sdaccdpc_doc WITH KEY vbeln = ixsdaccdpc-vgbel
+                                        posnr = ixsdaccdpc-vgpos
+                                        BINARY SEARCH.
+    IF NOT sy-subrc IS INITIAL.
+      DELETE ixsdaccdpc.
+    ENDIF.
+  ENDLOOP.
+
+  LOOP AT ixsdaccdpc.
+    sdaccdpc = ixsdaccdpc.
+
+    AT FIRST.
+      CALL FUNCTION 'CONTROL_FORM'
+        EXPORTING
+          command = 'PROTECT'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'TERMS_OF_DOWNPAYMENT_HEADER'.
+      IF sy-subrc NE 0.
+        PERFORM protocol_update.
+      ENDIF.
+    ENDAT.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'TERMS_OF_DOWNPAYMENTS'
+      EXCEPTIONS
+        element = 1
+        window  = 2.
+    IF sy-subrc NE 0.
+      PERFORM protocol_update.
+    ENDIF.
+
+    AT LAST.
+      CALL FUNCTION 'CONTROL_FORM'
+        EXPORTING
+          command = 'ENDPROTECT'.
+    ENDAT.
+  ENDLOOP.
+ENDFORM.                    " DOWNPAYMENTS
+
+*&---------------------------------------------------------------------*
+*&      Form  get_fax_land
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_NAST_TLAND  text
+*----------------------------------------------------------------------*
+FORM get_fax_land USING   p_nast_land LIKE nast-tland.
+
+  DATA  l_land    LIKE nast-tland .
+  CLEAR l_land.
+
+
+  IF NOT addr_key-addrnumber IS INITIAL.
+    CALL FUNCTION 'WFMC_FAXNUMBER_FOR_ADDRESS'
+      EXPORTING
+        adrnr          = addr_key-addrnumber
+      IMPORTING
+        tland          = l_land
+      EXCEPTIONS
+        addr_not_exist = 1
+        OTHERS         = 2.
+    IF sy-subrc = 0 AND NOT l_land IS INITIAL.
+      p_nast_land = l_land.
+    ENDIF.
+
+  ENDIF.
+ENDFORM.                    " get_fax_land
+
+*ENHANCEMENT-POINT RVADIN01_02 SPOTS ES_RVADIN01 STATIC.
+
+*ENHANCEMENT-POINT RVADIN01_03 SPOTS ES_RVADIN01 STATIC.
+*&---------------------------------------------------------------------*
+*&      Form  BILL_TO
+*&---------------------------------------------------------------------*
+*       To determine and display Billing Address
+*----------------------------------------------------------------------*
+FORM bill_to .
+  DATA :   v_adrnr LIKE   kna1-adrnr.
+*  DATA :   v_landx LIKE   t005t-landx.
+
+  SELECT SINGLE adrnr
+                stceg FROM kna1
+                      INTO (v_adrnr, g_p_vat)
+                      WHERE kunnr = vbdkr-kunrg.
+
+  IF sy-subrc NE 0.
+    syst-msgid = 'VN'.
+    syst-msgno = '203'.
+    syst-msgty = 'E'.
+    syst-msgv1 = 'TVKO'.
+    syst-msgv2 = syst-subrc.
+    PERFORM protocol_update.
+    EXIT.
+  ENDIF.
+
+  CLEAR gv_fb_addr_get_selection.
+  gv_fb_addr_get_selection-addrnumber = v_adrnr.            "SADR40A
+
+*  CALL FUNCTION 'ADDR_GET'
+*    EXPORTING
+*      address_selection = gv_fb_addr_get_selection
+*      address_group     = 'CA01'
+*    IMPORTING
+*      sadr              = sadr1
+*    EXCEPTIONS
+*      OTHERS            = 01.
+
+  p_adrnr3 = v_adrnr.
+  CALL FUNCTION 'ADDRESS_INTO_PRINTFORM'
+   EXPORTING
+     ADDRESS_TYPE                         = '1'
+     ADDRESS_NUMBER                       = p_adrnr3
+     NUMBER_OF_LINES                      = 7
+*   STREET_HAS_PRIORITY                  = ' '
+*   LINE_PRIORITY                        = ' '
+*   COUNTRY_NAME_IN_RECEIVER_LANGU       = ' '
+*   LANGUAGE_FOR_COUNTRY_NAME            = ' '
+*   NO_UPPER_CASE_FOR_CITY               = ' '
+*   IV_NATION                            = ' '
+*   IV_NATION_SPACE                      = ' '
+*   IV_PERSON_ABOVE_ORGANIZATION         = ' '
+*   IS_BUPA_TIME_DEPENDENCY              = ' '
+*   IV_LANGU_CREA                        = ' '
+   IMPORTING
+     ADDRESS_PRINTFORM                    = G_ADRS_PRINT3.
+
+  IF sy-subrc NE 0.
+    CLEAR sadr.
+  ENDIF.                                                    "SADR40A
+  SELECT SINGLE landx FROM t005t
+                      INTO v_landx
+                     WHERE spras = sadr1-spras
+                       AND land1 =  sadr1-land1.
+
+*  VBDKA-SLAND = SADR-LAND1.
+  IF sy-subrc NE 0.
+    syst-msgid = 'VN'.
+    syst-msgno = '203'.
+    syst-msgty = 'E'.
+    syst-msgv1 = 'SADR'.
+    syst-msgv2 = syst-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+  SELECT SINGLE J_1ICSTNO INTO G_p_CST
+                          FROM J_1IMOCUST
+                         WHERE KUNNR = vbdkr-kunrg.
+ENDFORM.                    " BILL_TO
+*&---------------------------------------------------------------------*
+*&      Form  CUSTOMER_DETAILS
+*&---------------------------------------------------------------------*
+*       To bring out Customer Details
+*----------------------------------------------------------------------*
+FORM customer_details .
+  DATA: L_VBELN(10) TYPE N.
+  DATA: L_VBELN1(10) TYPE N,
+        l_regio     TYPE T001W-REGIO,
+        L_WERKS     TYPE VBRP-WERKS,
+        L_WERKS1     TYPE VBRP-WERKS.
+**To Fetch the Originating Sales Order Number
+  SELECT SINGLE VBELV FROM  VBFA
+                      INTO  G_S_VBELN
+                     WHERE  VBELN = vbdkr-vbeln
+                       AND  VBTYP_V = 'C'.
+** To fetch Originating Sales Order No- without Refernce
+  IF sy-subrc NE 0.
+    SELECT SINGLE VBELV FROM  VBFA
+                  INTO  G_X_VBELN
+                 WHERE  VBELN = vbdkr-vbeln
+                   AND  VBTYP_V = 'H'.
+  ENDIF.
+**To Fetch the Originating Sales Order Date
+  SELECT SINGLE ERDAT  FROM VBAK
+                       INTO VBAK-ERDAT
+                      WHERE VBELN = G_S_VBELN.
+** To Fetch Invoice no which serves as the reference document.
+  SELECT SINGLE VBELN FROM VBFA
+                      INTO G_I_VBELN
+                     WHERE VBELV = G_S_VBELN
+                       AND VBTYP_N = 'M'.
+** To Fetch Invoice date which serves as the reference document.
+  SELECT SINGLE ERDAT FROM VBRK
+                      INTO l_ref_date
+                     WHERE VBELN = G_I_VBELN.
+** To Fetch Credit/Debit Memo no.
+  IF vbrk-fkart = 'G2'.
+    SELECT SINGLE VBELN FROM VBFA
+                        INTO G_CMR_VBELN
+                       WHERE VBELV = G_S_VBELN
+                         AND VBTYP_N = 'K'.
+    IF SY-SUBRC NE 0.
+      SELECT SINGLE VBELN FROM VBFA
+                          INTO G_CMR_VBELN
+                         WHERE VBELV = G_S_VBELN
+                           AND VBTYP_N = 'L'.
+    ENDIF.
+  ELSEIF vbrk-fkart = 'L2'.
+    SELECT SINGLE VBELN FROM VBFA
+                      INTO G_CMR_VBELN
+                     WHERE VBELV = G_S_VBELN
+                       AND VBTYP_N = 'L'.
+    IF SY-SUBRC NE 0.
+      SELECT SINGLE VBELN FROM VBFA
+                          INTO G_CMR_VBELN
+                         WHERE VBELV = G_S_VBELN
+                           AND VBTYP_N = 'K'.
+    ENDIF.
+  ELSEIF vbrk-fkart = 'RE'.
+*    SELECT SINGLE VBELN FROM VBFA
+*                      INTO G_CMR_VBELN
+*                     WHERE VBELV = G_S_VBELN
+*                       AND VBTYP_N = 'L'.
+*    IF SY-SUBRC NE 0.
+    SELECT SINGLE VBELN FROM VBFA
+                        INTO G_CMR_VBELN
+                       WHERE VBELV = G_S_VBELN
+                         AND VBTYP_N = 'H'.
+** To fetch Originating Sales Order No- without Refernce
+    IF sy-subrc NE 0.
+      G_CMR_VBELN = G_X_VBELN.
+
+    ENDIF.
+*    ENDIF.
+  ENDIF.
+** To Fetch Customer Delivery Order number.
+  SELECT SINGLE VBELN FROM VBFA
+                      INTO G_DEL_VBELN
+                     WHERE VBELV = G_S_VBELN
+                       AND VBTYP_N = 'J'.
+** To Fetch Customer PO number.
+  SELECT SINGLE bstkd FROM  vbkd
+                      INTO  vbkd-bstkd
+                     WHERE vbeln = G_S_VBELN.
+** To Fetch Customer PO number without reference document.
+  IF sy-subrc NE 0.
+    SELECT SINGLE bstkd FROM  vbkd
+                  INTO  vbkd-bstkd
+                 WHERE vbeln = G_X_VBELN.
+  ENDIF.
+*To find and display Plant Address.
+  L_VBELN = vbdkr-vbeln.
+
+  SELECT SINGLE WERKS FROM VBRP INTO L_WERKS
+                     WHERE VBELN = L_VBELN.
+  IF SY-SUBRC = 0 .
+    SELECT SINGLE ADRNR FROM T001W INTO l_adnr
+                       WHERE WERKS = L_WERKS.
+  ENDIF.
+
+***********************************************************
+*    IF SY-SUBRC = 0 .
+***Changes done by hard coding plant for fixing
+*** Place bussiness plant
+*  if L_WERKS = '1001'
+*  or L_WERKS = '1008'.
+*    L_WERKS = '1000'.
+*  endif.
+*
+*  if L_WERKS = '1003'.
+*    L_WERKS = '1002'.
+*  endif.
+**  SELECT SINGLE ADRNR REGIO FROM T001W INTO (P_ADRNR,L_REGION)
+**                                           WHERE WERKS = L_WERKS.
+*      SELECT SINGLE ADRNR FROM T001W INTO l_adnr
+*                          WHERE WERKS = L_WERKS.
+*ENDIF.
+***********************************************************
+  CLEAR gv_fb_addr_get_selection.
+  gv_fb_addr_get_selection-addrnumber = l_adnr.             "SADR40A
+
+*  CALL FUNCTION 'ADDR_GET'
+*    EXPORTING
+*      address_selection = gv_fb_addr_get_selection
+*      address_group     = 'CA01'
+*    IMPORTING
+*      sadr              = sadr2
+*    EXCEPTIONS
+*      OTHERS            = 01.
+*  IF sy-subrc NE 0.
+*    CLEAR sadr.
+*  ENDIF.                                                    "SADR40A
+
+  p_adrnr1 = l_adnr.
+  CALL FUNCTION 'ADDRESS_INTO_PRINTFORM'
+   EXPORTING
+     ADDRESS_TYPE                         = '1'
+     ADDRESS_NUMBER                       = p_adrnr1
+     NUMBER_OF_LINES                      = 7
+*   STREET_HAS_PRIORITY                  = ' '
+*   LINE_PRIORITY                        = ' '
+*   COUNTRY_NAME_IN_RECEIVER_LANGU       = ' '
+*   LANGUAGE_FOR_COUNTRY_NAME            = ' '
+*   NO_UPPER_CASE_FOR_CITY               = ' '
+*   IV_NATION                            = ' '
+*   IV_NATION_SPACE                      = ' '
+*   IV_PERSON_ABOVE_ORGANIZATION         = ' '
+*   IS_BUPA_TIME_DEPENDENCY              = ' '
+*   IV_LANGU_CREA                        = ' '
+   IMPORTING
+     ADDRESS_PRINTFORM                    = G_ADRS_PRINT1.
+
+  SELECT SINGLE landx FROM t005t
+                      INTO v_landx
+                     WHERE spras =  sadr2-spras
+                       AND land1 =  sadr2-land1.
+
+*  VBDKA-SLAND = SADR-LAND1.
+  IF sy-subrc NE 0.
+    syst-msgid = 'VN'.
+    syst-msgno = '203'.
+    syst-msgty = 'E'.
+    syst-msgv1 = 'SADR'.
+    syst-msgv2 = syst-subrc.
+    PERFORM protocol_update.
+  ENDIF.
+
+  select SINGLE J_1ILSTNO J_1ICSTNO from J_1IMOCOMP
+                                    into (g_d_lstno , G_d_CSTNO)
+                                    where BUKRS = 'NPIN'
+                                    and   WERKS = L_WERKS.
+
+  CALL FUNCTION 'WRITE_FORM'
+  EXPORTING
+    element                        = 'DEPOT_ADDRESS'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+    window                         = 'PHONE'
+  EXCEPTIONS
+    element                        = 1
+    function                       = 2
+    type                           = 3
+    unopened                       = 4
+    unstarted                      = 5
+    window                         = 6
+    bad_pageformat_for_print       = 7
+    spool_error                    = 8
+    codepage                       = 9
+    OTHERS                         = 10
+  .
+*****************************************************************
+*****************************************************************
+*------> To print Principle place of business address
+  L_VBELN1 = vbdkr-vbeln.
+
+  SELECT SINGLE WERKS FROM VBRP INTO L_WERKS1
+                     WHERE VBELN = L_VBELN1.
+  IF SY-SUBRC = 0 .
+    SELECT SINGLE REGIO FROM T001W INTO l_regio
+                      WHERE WERKS = L_WERKS1.
+** Place bussiness plant
+    IF sy-subrc = 0.
+      IF l_regio = '22'.
+        L_WERKS1 = '1000'.
+      ELSEIF l_regio = '01'.
+        L_WERKS1 = '1002'.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+**Changes done by hard coding plant for fixing
+** Place bussiness plant
+*  if L_WERKS1 = '1001'
+*  or L_WERKS1 = '1008'.
+*    L_WERKS1 = '1000'.
+*  endif.
+*
+*  if L_WERKS1 = '1003'.
+*    L_WERKS1 = '1002'.
+*  endif.
+*  SELECT SINGLE ADRNR REGIO FROM T001W INTO (P_ADRNR,L_REGION)
+*                                           WHERE WERKS = L_WERKS.
+*########################################################################
+*      SELECT SINGLE ADRNR FROM T001W INTO l_adnr1
+*                          WHERE WERKS = L_WERKS1.
+*ENDIF.
+************************************************************
+*  CLEAR gv_fb_addr_get_selection.
+*  gv_fb_addr_get_selection-addrnumber = l_adnr1.             "SADR40A
+*
+**  CALL FUNCTION 'ADDR_GET'
+**    EXPORTING
+**      address_selection = gv_fb_addr_get_selection
+**      address_group     = 'CA01'
+**    IMPORTING
+**      sadr              = sadr3
+**    EXCEPTIONS
+**      OTHERS            = 01.
+*p_adrnr = l_adnr1.
+*CALL FUNCTION 'ADDRESS_INTO_PRINTFORM'
+* EXPORTING
+*   ADDRESS_TYPE                         = '1'
+*   ADDRESS_NUMBER                       = p_adrnr
+*   NUMBER_OF_LINES                      = 7
+**   STREET_HAS_PRIORITY                  = ' '
+**   LINE_PRIORITY                        = ' '
+**   COUNTRY_NAME_IN_RECEIVER_LANGU       = ' '
+**   LANGUAGE_FOR_COUNTRY_NAME            = ' '
+**   NO_UPPER_CASE_FOR_CITY               = ' '
+**   IV_NATION                            = ' '
+**   IV_NATION_SPACE                      = ' '
+**   IV_PERSON_ABOVE_ORGANIZATION         = ' '
+**   IS_BUPA_TIME_DEPENDENCY              = ' '
+**   IV_LANGU_CREA                        = ' '
+* IMPORTING
+*   ADDRESS_PRINTFORM                    = G_ADRS_PRINT.
+*
+*
+*  IF sy-subrc NE 0.
+*    CLEAR sadr.
+*  ENDIF.                                                    "SADR40A
+*  SELECT SINGLE landx FROM t005t
+*                      INTO v_landx1
+*                     WHERE spras =  sadr3-spras
+*                       AND land1 =  sadr3-land1.
+*
+**  VBDKA-SLAND = SADR-LAND1.
+*  IF sy-subrc NE 0.
+*    syst-msgid = 'VN'.
+*    syst-msgno = '203'.
+*    syst-msgty = 'E'.
+*    syst-msgv1 = 'SADR'.
+*    syst-msgv2 = syst-subrc.
+*    PERFORM protocol_update.
+*  ENDIF.
+*
+*  select SINGLE J_1ILSTNO J_1ICSTNO from J_1IMOCOMP
+*                                    into (g_d_lstno , G_d_CSTNO)
+*                                    where BUKRS = 'NPIN'
+*                                    and   WERKS = L_WERKS1.
+*########################################################################
+    IF L_WERKS1 = '1000'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1000'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ELSEIF L_WERKS1 = '1002'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1002'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ELSEIF L_WERKS1 = '1004'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1004'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ELSEIF L_WERKS1 = '1005'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1005'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ELSEIF L_WERKS1 = '1006'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1006'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ELSEIF L_WERKS1 = '1007'.
+      CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element                        = 'BUSS_ADDR_1007'
+*     FUNCTION                       = 'SET'
+*     TYPE                           = 'BODY'
+        window                         = 'BUS_ADDR'
+      EXCEPTIONS
+        element                        = 1
+        function                       = 2
+        type                           = 3
+        unopened                       = 4
+        unstarted                      = 5
+        window                         = 6
+        bad_pageformat_for_print       = 7
+        spool_error                    = 8
+        codepage                       = 9
+        OTHERS                         = 10.
+    ENDIF.
+
+*****************************************************************
+*****************************************************************
+* To Fetch Terms of Payment and Payment Due Date
+    SELECT SINGLE zterm
+                  erdat
+                  fkdat
+                  zuonr FROM vbrk
+                        INTO (vbrk-zterm, vbrk-erdat, vbrk-fkdat, vbrk-zuonr)
+                       WHERE vbeln = vbdkr-vbeln.
+
+    SELECT SINGLE vtext FROM tvzbt
+                        INTO tvzbt-vtext
+                       WHERE zterm = vbrk-zterm
+                         AND spras = 'E'.
+
+    CALL FUNCTION 'SD_PRINT_TERMS_OF_PAYMENT'
+      EXPORTING
+        bldat            = vbrk-erdat
+        budat            = vbrk-fkdat
+        cpudt            = vbrk-erdat
+        terms_of_payment = vbrk-zterm
+      TABLES
+        top_text         = top_text1.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+    CALL FUNCTION 'WRITE_FORM'
+      EXPORTING
+        element = 'CUSTOMER_INFO'
+        window  = 'ORDER_NO'.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+* To determine and display Billing Type of the particular document
+    SELECT SINGLE fkart
+                  STCEG FROM vbrk
+                        INTO (vbrk-fkart, VBRK-STCEG)
+                       WHERE vbeln = VBDKR-VBELN.
+
+    IF vbrk-fkart = 'G2'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'CMR'
+          window  = 'ORDER_NO'.
+    ELSEIF vbrk-fkart = 'L2'.
+      CALL FUNCTION 'WRITE_FORM'
+        EXPORTING
+          element = 'DMR'
+          window  = 'ORDER_NO'.
+    ENDIF.
+    PERFORM HDR_PLANT_ADD_VAT.
+*  PERFORM PLACE_OF_BUSINESS.
+
+  ENDFORM.                    " CUSTOMER_DETAILS
+*&---------------------------------------------------------------------*
+*&      Form  NOTE_TEXT
+*&---------------------------------------------------------------------*
+*      To display Note - Additional Information
+*----------------------------------------------------------------------*
+FORM note_text .
+
+* To Fetch Note - Additional Information
+  DATA: tdname LIKE thead-tdname.
+
+  CLEAR : t_line, t_line[].
+  CLEAR : l_line1,
+          l_line2,
+          l_line3,
+          l_line4,
+          l_line5,
+          l_line6.
+
+  tdname = vbdkr-vbeln.
+
+  CALL FUNCTION 'READ_TEXT'
+    EXPORTING
+      client                  = sy-mandt
+      id                      = '0002'
+      language                = 'E'
+      name                    = tdname
+      object                  = 'VBBK'
+    TABLES
+      lines                   = t_line
+    EXCEPTIONS
+      id                      = 1
+      language                = 2
+      name                    = 3
+      not_found               = 4
+      object                  = 5
+      reference_check         = 6
+      wrong_access_to_archive = 7
+      OTHERS                  = 8.
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+*loop at t_line.
+
+  READ TABLE t_line INDEX 1 .
+  IF sy-subrc = 0.
+    l_line1 = t_line-tdline.
+  ENDIF.
+
+  READ TABLE t_line INDEX 2 .
+  IF sy-subrc = 0.
+    l_line2 = t_line-tdline.
+  ENDIF.
+
+  READ TABLE t_line INDEX 3 .
+  IF sy-subrc = 0.
+    l_line3 = t_line-tdline.
+  ENDIF.
+
+  READ TABLE t_line INDEX 4 .
+  IF sy-subrc = 0.
+    l_line4 = t_line-tdline.
+  ENDIF.
+
+  READ TABLE t_line INDEX 5 .
+  IF sy-subrc = 0.
+    l_line5 = t_line-tdline.
+  ENDIF.
+
+  READ TABLE t_line INDEX 6 .
+  IF sy-subrc = 0.
+    l_line6 = t_line-tdline.
+  ENDIF.
+
+  CALL FUNCTION 'WRITE_FORM'
+   EXPORTING
+     element                        = 'NOTE'
+*     function                       = 'SET'
+*     TYPE                          = 'BODY'
+     window                         = 'TOT_BOX'
+*      IMPORTING
+*        PENDING_LINES                  =
+   EXCEPTIONS
+     element                        = 1
+     function                       = 2
+     type                           = 3
+     unopened                       = 4
+     unstarted                      = 5
+     window                         = 6
+     bad_pageformat_for_print       = 7
+     spool_error                    = 8
+     codepage                       = 9
+     OTHERS                         = 10
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+*endloop.
+ENDFORM.                    " NOTE_TEXT
+*&---------------------------------------------------------------------*
+*&      Form  TOTAL_TEXT
+*&---------------------------------------------------------------------*
+*      To Calculate and Display Total amount and GST
+*----------------------------------------------------------------------*
+FORM total_text .
+
+  v_stotal = komk-supos.
+  v_gst    = v_stotal / 10.
+  v_gtotal = v_stotal + v_gst.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'TOTAL '
+      window  = 'TOTAL'.
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+
+ENDFORM.                    " TOTAL_TEXT
+*&---------------------------------------------------------------------*
+*&      Form  REPEAT_COPY
+*&---------------------------------------------------------------------*
+*       To determine repeated print-out
+*----------------------------------------------------------------------*
+FORM repeat_copy .
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'REPEAT_1'
+      window  = 'REPEAT1'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+  ENDIF.
+ENDFORM.                    " REPEAT_COPY
+*&---------------------------------------------------------------------*
+*&      Form  ITEM_TAX_DETAILS
+*&---------------------------------------------------------------------*
+* Adding and displaying Taxes
+*----------------------------------------------------------------------*
+FORM ITEM_TAX_DETAILS .
+
+  DATA : L_VAT TYPE NETWR,
+         L_VAT1(8).
+  DATA : L_TOT1(40)  TYPE C.
+  DATA : L_TOT2(2)   TYPE C.
+  DATA : L_TOT3      TYPE I VALUE 50.
+  DATA : L_LEN       TYPE I.
+  DATA : L_LEN1      TYPE I.
+  DATA : L_DISCOUNT  TYPE KAWRT,
+         L_DISCOUNT1 TYPE KAWRT,
+         L_DISC(15),
+         L_VBAP TYPE VBAP.
+  DATA : L_SPLIT1(255),
+         L_SPLIT2(255),
+         L_STRLEN TYPE I.
+  CLEAR G_VATPER.
+
+
+  CLEAR : W_KOMV,
+          G_DISC,
+*          G_C_DISC,
+          G_VAT,
+          G_C_VAT,
+          G_OCT,
+          G_C_OCT,
+          G_VCESS,
+          G_C_VCESS,
+          G_ATAX,
+          G_C_ATAX,
+          G_AMT_DISC,
+          G_GR_TOTAL,
+          G_GRR_TOTAL,
+          G_GRA_TOTAL.
+
+  LOOP AT tkomv.
+    CASE tkomv-KSCHL.
+*      WHEN 'Z001'."Discount
+*        W_KOMV-KWERT = tkomv-KWERT.
+*        G_DISC = G_DISC + W_KOMV-KWERT.
+*        IF g_disc IS NOT INITIAL.
+*          MOVE g_disc TO G_C_DISC.
+*          CONDENSE G_C_DISC NO-GAPS.
+**To Calculate Total Discount %.
+*          IF NOT G_C_DISC IS INITIAL.
+*            L_DISCOUNT = ( G_C_DISC * 100 ) / G_TOTAL.
+*            L_DISCOUNT = -1 * L_DISCOUNT.
+*            L_DISC = L_DISCOUNT.
+*            CONDENSE L_DISC NO-GAPS.
+*            CONCATENATE '@' '' L_DISC ' %' INTO G_DISCPER.
+*          ENDIF.
+*        ENDIF.
+      WHEN 'J1AU'.    "VAT
+        W_KOMV-KWERT = tkomv-KWERT.
+        G_VAT  = G_VAT + W_KOMV-KWERT.
+        IF G_VAT IS NOT INITIAL.
+          MOVE G_VAT TO G_C_VAT.
+          CONDENSE G_C_VAT NO-GAPS.
+*To Calculate Total VAT %.
+*          L_VAT = tkomv-KBETR / 10.
+*          L_VAT1 = L_VAT.
+*          CONCATENATE '@ ' L_VAT1' %' INTO G_VATPER.
+          SELECT SINGLE low FROM tvarv
+                            INTO G_VATPER
+                           WHERE name = 'ZSALES_VAT'.
+        ENDIF.
+      WHEN 'JOC1'.    "OCTROI
+        W_KOMV-KWERT = tkomv-KWERT.
+        G_OCT = G_OCT + W_KOMV-KWERT.
+        IF G_OCT IS NOT INITIAL.
+          MOVE G_OCT TO G_C_OCT.
+          CONDENSE G_C_OCT NO-GAPS.
+        ENDIF.
+      WHEN 'J1AC'.    " VAT Cess
+        W_KOMV-KWERT = tkomv-KWERT.
+        G_VCESS = G_VCESS + W_KOMV-KWERT.
+        IF G_VCESS IS NOT INITIAL.
+          MOVE G_VCESS TO G_C_VCESS.
+          CONDENSE G_C_VCESS NO-GAPS.
+        ENDIF.
+      WHEN 'J1AD'.    " Add.Tax
+        W_KOMV-KWERT = tkomv-KWERT.
+        G_ATAX  = G_ATAX + W_KOMV-KWERT.
+        IF G_ATAX IS NOT INITIAL.
+          MOVE G_ATAX TO G_C_ATAX.
+          CONDENSE G_C_ATAX NO-GAPS.
+        ENDIF.
+    ENDCASE.
+  ENDLOOP.
+
+*  SELECT sum( KZWI2 ) FROM VBAP INTO G_DISC WHERE VBELN = G_S_VBELN.
+**        G_DISC = G_DISC + L_VBAP-KZWI2.
+**  ENDSELECT.
+*G_C_DISC = G_DISC.
+  CALL FUNCTION 'CLOI_PUT_SIGN_IN_FRONT'
+    CHANGING
+      value = G_C_DISC.
+
+
+  CONDENSE G_C_DISC NO-GAPS.
+
+  G_AMT_DISC = G_TOTAL   -
+               G_C_DISC.
+  G_GR_TOTAL = G_TOTAL   -
+               G_C_DISC  +
+               G_C_VAT   +
+               G_C_OCT   +
+               G_C_VCESS +
+               G_C_ATAX.
+
+  G_GRR_TOTAL = G_GR_TOTAL.
+  CONDENSE G_GRR_TOTAL NO-GAPS.
+  L_LEN = strlen( G_GRR_TOTAL ).
+  L_LEN1 = L_LEN - 2.
+  L_TOT2 = G_GRR_TOTAL+L_LEN1(2).
+  L_LEN1 = L_LEN1 - 1.
+  L_TOT1 = G_GRR_TOTAL+0(L_LEN1).
+
+  IF L_TOT2 ge L_TOT3.
+    L_TOT1 = L_TOT1 + 1.
+    CONDENSE L_TOT1 NO-GAPS.
+    L_TOT2 = '00'.
+  ELSE.
+    L_TOT2 = '00'.
+  ENDIF.
+
+  CONCATENATE L_TOT1 '.' L_TOT2 into G_GRR_TOTAL.
+  G_GRA_TOTAL = G_GRR_TOTAL.
+
+  CALL FUNCTION 'HR_IN_CHG_INR_WRDS'
+    EXPORTING
+      AMT_IN_NUM         = G_GRA_TOTAL
+    IMPORTING
+      AMT_IN_WORDS       = G_WORDS
+    EXCEPTIONS
+      DATA_TYPE_MISMATCH = 1
+      OTHERS             = 2.
+
+  L_STRLEN = strlen( G_WORDS ).
+*L_SPLIT1 = STRREV( G_WORDS ).
+  L_STRLEN = L_STRLEN - 6.
+  if L_STRLEN > 0.
+    L_SPLIT2 = G_WORDS+0(L_STRLEN).
+    G_WORDS = L_SPLIT2 .
+    CONCATENATE 'Rupees ' G_WORDS ' Only' into G_WORDS.
+  endif.
+
+*  CONCATENATE G_WORDS ' Only' into G_WORDS.
+
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'AMOUNT_IN_WORDS'
+      window  = 'AMT_WRDS'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+ENDFORM.                    " ITEM_TAX_DETAILS
+*&---------------------------------------------------------------------*
+*&      Form  ITEM_DISC_DETAILS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM ITEM_DISC_DETAILS .
+  DATA : L_KZWI2 TYPE VBAP-KZWI2.
+  data : w_disc1(30) type c,
+       w_disc2(30) TYPE c.
+  SELECT SINGLE KZWI2 FROM VBAP
+                      INTO L_KZWI2
+                      WHERE VBELN = G_CMR_VBELN
+                      AND POSNR = tvbdpr-POSNR.
+  IF sy-subrc = 0.
+    G_DISC = G_DISC + L_KZWI2.
+    G_C_DISC = G_DISC.
+*Removing Minus symbol for the field
+    w_disc2 = G_DISC.
+    if w_disc2  ca '-'.
+      SPLIT w_disc2 AT '-' INTO W_disc1
+                                w_disc2.
+      CONDENSE w_disc1  NO-GAPS.
+      G_C_DISC = w_disc1.
+    endif.
+  ELSE.
+    G_DISC   = 0.
+    G_C_DISC = G_DISC.
+  ENDIF.
+*  ENDSELECT.
+ENDFORM.                    " ITEM_DISC_DETAILS
+*&---------------------------------------------------------------------*
+*&      Form  HDR_PLANT_ADD_VAT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM HDR_PLANT_ADD_VAT .
+  DATA : l_region LIKE T001W-REGIO.
+  DATA : l_werks  LIKE vbrp-werks.
+  DATA : l_region1 LIKE T001W-REGIO.
+  DATA : l_werks1  LIKE vbrp-werks.
+  SELECT SINGLE WERKS FROM VBRP
+                      INTO L_WERKS
+                     WHERE VBELN = vbdkr-vbeln.
+  IF sy-subrc = 0.
+    SELECT SINGLE REGIO FROM  T001W
+                        INTO  L_REGION
+                        WHERE WERKS = L_WERKS.
+    IF sy-subrc = 0.
+      IF VBRK-FKART = 'RE'.
+        IF L_REGION = '11'.
+          CALL FUNCTION 'WRITE_FORM'
+            EXPORTING
+              element = 'KERALA'
+              window  = 'SIGNATUR'
+            EXCEPTIONS
+              element = 1
+              window  = 2.
+          IF sy-subrc NE 0.
+            PERFORM protocol_update.
+          ENDIF.
+        ELSE.
+          CALL FUNCTION 'WRITE_FORM'
+            EXPORTING
+              element = 'ROI'
+              window  = 'SIGNATUR'
+            EXCEPTIONS
+              element = 1
+              window  = 2.
+          IF sy-subrc NE 0.
+            PERFORM protocol_update.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+**********************************************************
+  SELECT SINGLE WERKS FROM VBRP
+                      INTO L_WERKS1
+                     WHERE VBELN = vbdkr-vbeln.
+  IF sy-subrc = 0.
+    SELECT SINGLE REGIO FROM  T001W
+                        INTO  L_REGION1
+                        WHERE WERKS = L_WERKS1.
+    IF sy-subrc = 0.
+      IF L_REGION1 = '11'.
+        CALL FUNCTION 'WRITE_FORM'
+          EXPORTING
+            element = 'KERALA1'
+            window  = 'PHONE'
+          EXCEPTIONS
+            element = 1
+            window  = 2.
+        IF sy-subrc NE 0.
+          PERFORM protocol_update.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+ENDFORM.                    " HDR_PLANT_ADD_VAT
+*&---------------------------------------------------------------------*
+*&      Form  PACKAGE_SUMMARY
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM PACKAGE_SUMMARY .
+  DATA : l_GEWEI1 LIKE VBAP-GEWEI.
+  DATA : l_GROSS_WT(20).
+  G_GROSS_WT     = G_GROSS_WT + tvbdpr-brgew.
+  l_GEWEI1 = tvbdpr-GEWEI.
+  l_GROSS_WT = G_GROSS_WT.
+  CONDENSE l_GROSS_WT NO-GAPS.
+  CONCATENATE l_GROSS_WT
+              l_GEWEI1
+              INTO G_TOT_WT.
+  CALL FUNCTION 'WRITE_FORM'
+    EXPORTING
+      element = 'PACKAGE_SUMMARY'
+      window  = 'PCK_SMMY'
+    EXCEPTIONS
+      element = 1
+      window  = 2.
+  IF sy-subrc NE 0.
+    PERFORM protocol_update.
+  ENDIF.
+ENDFORM.                    " PACKAGE_SUMMARY

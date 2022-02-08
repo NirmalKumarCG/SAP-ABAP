@@ -1,0 +1,610 @@
+*************************************************************************
+**Report Name: ZFI_POST_INCOMING_PAYMENTS                               *
+**Consultant : Sathish Kumar.S                                          *
+**Author     : Sathish Kumar.S                                          *
+**Date       : 16.03.2009                                               *
+**Description: Program creates an Batch Input Session for upload of     *
+*              Post Incoming Payments via transaction F-28.             *
+**----------------------------------------------------------------------*
+report ZFI_POST_INCOMING_PAYMENTS
+       no standard page heading line-size 255.
+*----------------------------------------------------------------------*
+* Tables
+*----------------------------------------------------------------------*
+TABLES : KNB1,   " General Data in Customer Master
+         SKB1.   " G/L account master (company code)
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+*include bdcrecx1.
+* include programs for common processes in interface programs
+DATA  zzret_code LIKE sy-subrc.
+INCLUDE zbdcincl.
+
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+*PARAMETERS: P_date(10)  OBLIGATORY,            "Document Date in Document "BKPF-BLDAT
+PARAMETERS: p_type     LIKE  BKPF-BLART OBLIGATORY,            "Document Type
+            p_code     LIKE  lfb1-bukrs OBLIGATORY,            "Company code
+*            P_date1(10) OBLIGATORY,            "Posting Date in the Document "BKPF-BUDAT
+            p_prd      LIKE  BKPF-MONAT,                       "Fiscal Period
+            p_cur      LIKE  BKPF-WAERS OBLIGATORY.            "Currency Key
+SELECTION-SCREEN : END OF BLOCK 001.
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-006.
+PARAMETERS: p_upl      LIKE rlgrap-filename DEFAULT 'c:\temp\post-income-payments.xls',
+            p_hed      AS CHECKBOX DEFAULT 'X',     " With header line? X or Y for yes
+            p_test     AS CHECKBOX,                 " test run? X or Y for yes
+            p_sess(12) TYPE c,
+            p_mode.
+
+PARAMETERS: p_rest      LIKE rlgrap-filename  DEFAULT 'c:\temp\Result.xls'.
+SELECTION-SCREEN : END OF BLOCK 002.
+
+*----------------------------------------------------------------------*
+* Data Declaration
+*----------------------------------------------------------------------*
+* input file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_indata OCCURS 0,
+       XBLNR LIKE BKPF-XBLNR,       "Reference Document Number
+       BKTXT LIKE BKPF-BKTXT,       "Document Header Text
+       AUGTX LIKE RF05A-AUGTX,      "Clearing Text
+       KONTO(10)," LIKE RF05A-KONTO,      "Account Number or Matchcode for the Account To Be Posted
+       WRBTR(16), "LIKE BSEG-WRBTR,       "Amount in Document Currency
+       VALUT(10)," LIKE BSEG-VALUT,       "Value Date
+       PRCTR LIKE BSEG-PRCTR,       "Profit Center
+       SGTXT LIKE BSEG-SGTXT,       "Item Text
+       AGKON(10)," LIKE RF05A-AGKON,      "Account Number or Key of a Worklist
+       KUNNR(10),                   "Account Number or Key of a Worklist
+*       AGKOA LIKE RF05A-AGKOA,      "Account Type
+      END OF t_indata.
+
+*Output file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_outdata OCCURS 0.
+        INCLUDE STRUCTURE t_indata.
+DATA: desc type string,            "Description for error fields
+      d_no LIKE RF05L-BELNR,        "Accounting Document Number
+      sort,
+      end of t_outdata.
+
+*Output file format for Vendor Excise Maintainance with header line
+DATA: BEGIN OF t_rest OCCURS 0,
+       XBLNR(16),         "Reference Document Number
+       BKTXT(25),         "Document Header Text
+       AUGTX(50),         "Clearing Text
+       KONTO(17),         "Account Number or Matchcode for the Account To Be Posted
+       WRBTR(13),         "Amount in Document Currency
+       VALUT(10),         "Value Date
+       PRCTR(10),         "Profit Center
+       SGTXT(50),         "Item Text
+       AGKON(16),         "Account Number or Key of a Worklist
+       KUNNR(10),         "Account Number or Key of a Worklist
+*       AGKOA,             "Account Type
+       desc type string,
+       d_no(26),        "Accounting Document Number
+      END OF t_rest.
+
+DATA: it_raw  TYPE truxs_t_text_data.
+
+DATA:  w_upllen            TYPE i VALUE 2000,
+       err_msg(100)        TYPE c,
+       sap_venno           LIKE kna1-kunnr,
+       batch_name(30)      TYPE c,
+       v_open.
+
+* Constants
+CONSTANTS: c_trans(4)    VALUE 'F-28', " transaction used
+           delimiter(1)  VALUE ','.
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+
+*To store how much datas have read
+DATA: BEGIN OF tot,
+        ok                 TYPE i,
+        read               TYPE i,
+        err                TYPE i,
+      END OF tot.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c.
+*----------------------------------------------------------------------*
+* At Selection-Screen for upload and download file
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_upl.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_rest.
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+  IF p_upl IS INITIAL.
+    MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Validating Download File Path
+  IF p_rest IS INITIAL.
+    MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+  IF p_sess IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  IF p_mode IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+*To upload input File
+  PERFORM 100_upload_file.
+  IF t_indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+  ENDIF.
+*Validation of Fields before uploading
+  PERFORM field_validation.
+
+  IF p_test IS INITIAL.
+    if not t_indata[] is initial.
+      PERFORM create_income_payments.
+    endif.
+  ENDIF.
+
+*----------------------------------------------------------------------*
+*  End Of Selection
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+  IF NOT t_outdata[] IS INITIAL.
+*To Download error file.
+    PERFORM success_error_download.
+  ENDIF.
+  WRITE: /01      text-001 ,
+           27        ':',
+           28      sy-repid,
+*          92      text-001,
+           92      sy-pagno,
+          /01      text-002,
+           10      'by',
+           27      ':',
+           28      sy-uname,
+           82      sy-datum DD/MM/YY,
+           92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  WRITE: /01     text-003,
+          25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   35 tot-read.
+  IF p_test IS INITIAL.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL INCOMING PAYMENTS CREATED',    35 tot-ok.
+    WRITE: / 'TOTAL INCOMING PAYMENTS IN ERROR',   35 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',    35 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',   35 tot-err.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       To upload input File
+*----------------------------------------------------------------------*
+FORM 100_upload_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      i_line_header        = p_hed
+      i_tab_raw_data       = it_raw
+      i_filename           = p_upl
+    TABLES
+      i_tab_converted_data = t_indata.
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*       Validate Fields befor uploading
+*----------------------------------------------------------------------*
+FORM field_validation .
+
+data: v_altkn(10) TYPE n.
+
+  LOOP AT t_indata.
+    ADD 1 TO tot-read.
+
+    if not t_indata-konto is initial.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          INPUT  = t_indata-konto
+        IMPORTING
+          OUTPUT = t_indata-konto.
+      select single saknr from skb1
+                          into skb1
+                         where saknr = t_indata-konto
+                         and   bukrs = p_code.
+      if sy-subrc ne 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_outdata.
+        CONCATENATE 'G/L Account Number not maintained for company code'
+                    p_code
+                    INTO t_outdata-desc.
+
+*        t_outdata-desc = ' does not exists for the '.
+        t_outdata-sort = 'B'.
+        APPEND t_outdata.
+        DELETE t_indata.
+        CONTINUE.
+      endif.
+    else.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-desc = 'G/L Account Number is mandatory  '.
+      t_outdata-sort = 'B'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+
+    if t_indata-wrbtr is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-desc = 'Amount is mandatory  '.
+      t_outdata-sort = 'B'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+
+
+    if not t_indata-agkon is initial.
+    IF t_indata-agkon CO '1234567890 '.
+       v_altkn        = t_indata-agkon.
+       t_indata-agkon = v_altkn.
+    ENDIF.
+      select single * from knb1
+                          into knb1
+                         where altkn = t_indata-agkon.
+      if sy-subrc ne 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_outdata.
+        t_outdata-desc = 'Account(Customer) Number or Key of a Worklist does not exists '.
+        t_outdata-sort = 'B'.
+        APPEND t_outdata.
+        DELETE t_indata.
+        CONTINUE.
+      else.
+       t_indata-kunnr = knb1-kunnr.
+       modify t_indata TRANSPORTING kunnr.
+      endif.
+
+    else.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-desc = 'Account(Customer) Number or Key of a Worklist is mandatory  '.
+      t_outdata-sort = 'B'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+
+*    if t_indata-agkoa is initial.
+*        ADD 1 TO tot-err.
+*        MOVE-CORRESPONDING t_indata TO t_outdata.
+*        t_outdata-desc = 'Account Type is mandatory  '.
+*        t_outdata-sort = 'B'.
+*        APPEND t_outdata.
+*        DELETE t_indata.
+*        CONTINUE.
+*    endif.
+
+  ENDLOOP.
+ENDFORM.                    " FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_INCOME_PAYMENTS
+*&---------------------------------------------------------------------*
+*Create the post income payments based on the data from the i/pfile.
+*----------------------------------------------------------------------*
+FORM CREATE_INCOME_PAYMENTS .
+  CLEAR: err_msg,
+         batch_name,
+         t_outdata.
+  loop at t_indata.
+    PERFORM do_f-28_by_calltran
+                       TABLES t_indata
+                       USING  p_mode        "Show errors only
+                              err_msg
+                              batch_name
+                              sap_venno.
+
+    WAIT UP TO 1 SECONDS.
+*perform bdc_transaction using 'F-28'.
+    CALL TRANSACTION 'F-28' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+    IF sy-subrc NE 0.
+      zzret_code = sy-subrc.
+      IF v_open NE 'X'.
+        PERFORM bdc_open_group USING p_sess.
+        v_open = 'X'.
+      ENDIF.
+      PERFORM bdc_insert USING 'F-28'.
+    ELSE.
+      zzret_code = 0.
+    ENDIF.
+    IF zzret_code = 0.
+*    sap_venno = sy-msgv1.
+      t_outdata-d_no = sy-msgv1.
+    ELSE.
+*    CLEAR sap_venno.
+    ENDIF.
+
+    READ TABLE messtab WITH  KEY msgtyp = 'E'.
+    IF sy-subrc =  0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata .
+      t_outdata-sort = 'B'.
+*Get the Error details
+      PERFORM format_message.
+      APPEND t_outdata.
+    ELSE.
+      ADD 1 TO tot-ok.
+*Success Message
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      CONCATENATE 'Account Document Number'
+                   t_outdata-d_no
+                  'has been created successfully'
+             INTO t_outdata-desc.
+      t_outdata-sort = 'A'.
+      APPEND t_outdata.
+    ENDIF.
+
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+    REFRESH bdcdata.
+    clear : v_open,
+            t_outdata,
+            messtab.
+    refresh : messtab.
+  endloop.
+ENDFORM.                    " CREATE_INCOME_PAYMENTS
+*&---------------------------------------------------------------------*
+*&      Form  DO_F-28_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*      Fill the appropriate screens for the transaction and            *
+*       Call transaction F-28 (Post Incoming Payments).                *
+*----------------------------------------------------------------------*
+FORM DO_F-28_BY_CALLTRAN  TABLES   P_T_INDATA STRUCTURE t_indata
+                          USING    P_P_MODE
+                                   P_ERR_MSG
+                                   P_BATCH_NAME
+                                   P_SAP_VENNO.
+  PERFORM process_screen_100.
+  PERFORM process_screen_110.
+
+ENDFORM.                    " DO_F-28_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*       This is the initial screen of F-28 - where Post Incoming       *
+*       Payments is choosen from various options                       *
+*----------------------------------------------------------------------*
+FORM process_screen_100 .
+
+  PERFORM bdc_dynpro  USING  'SAPMF05A'     '0103'.
+  PERFORM bdc_field   USING  'BDC_CURSOR'   'RF05A-AGKON'.
+  PERFORM bdc_field   USING  'BDC_OKCODE'   '=PA'.
+  PERFORM bdc_field   USING  'BKPF-BLDAT'   t_indata-valut."P_date."'27.02.2009'.
+  PERFORM bdc_field   USING  'BKPF-BLART'   p_type."'DZ'.
+  PERFORM bdc_field   USING  'BKPF-BUKRS'   p_code."'NPIN'.
+  PERFORM bdc_field   USING  'BKPF-BUDAT'   t_indata-valut."P_date1."'27.02.2009'.
+  PERFORM bdc_field   USING  'BKPF-MONAT'   p_prd.          "'2'.
+  PERFORM bdc_field   USING  'BKPF-WAERS'   p_cur."'INR'.
+  PERFORM bdc_field   USING  'BKPF-XBLNR'   t_indata-xblnr.
+  PERFORM bdc_field   USING  'BKPF-BKTXT'   t_indata-bktxt.
+  PERFORM bdc_field   USING  'RF05A-AUGTX'  t_indata-augtx.
+  PERFORM bdc_field   USING  'RF05A-KONTO'  t_indata-konto. "'2003102'.
+  PERFORM bdc_field   USING  'BSEG-WRBTR'   t_indata-wrbtr. "'1000'.
+  PERFORM bdc_field   USING  'BSEG-VALUT'   t_indata-valut."'27.02.2009'.
+  PERFORM bdc_field   USING  'BSEG-PRCTR'   t_indata-prctr.
+  PERFORM bdc_field   USING  'BSEG-SGTXT'   t_indata-sgtxt.
+  PERFORM bdc_field   USING  'RF05A-AGKON'  t_indata-kunnr. "'600094'.
+  PERFORM bdc_field   USING  'RF05A-AGKOA'  'D'."t_indata-agkoa.
+  PERFORM bdc_field   USING  'RF05A-XNOPS'  'X'.
+
+ENDFORM.                    " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*       This is the screen consisting of all details on                *
+*       vendor excise maintenance                                     *
+*----------------------------------------------------------------------*
+FORM process_screen_110 .
+*  DATA: l_line TYPE i.
+*  DATA: tabix   LIKE sy-tabix.
+*
+*  CLEAR : g_date.
+*    CONCATENATE sy-datum+6(2)
+*                '.'
+*                sy-datum+4(2)
+*                '.'
+*                sy-datum+0(4)
+*               INTO g_date.
+
+  PERFORM bdc_dynpro  USING  'SAPDF05X'     '3100'.
+  PERFORM bdc_field   USING  'BDC_OKCODE'   '=OMX'.
+  PERFORM bdc_field   USING  'BDC_CURSOR'   'DF05B-PSSKT(01)'.
+  PERFORM bdc_field   USING  'RF05A-ABPOS'  '1'.
+  PERFORM bdc_dynpro  USING  'SAPDF05X'     '3100'.
+  PERFORM bdc_field   USING  'BDC_OKCODE'   '=Z-'.
+  PERFORM bdc_field   USING  'BDC_CURSOR'   'DF05B-PSSKT(01)'.
+  PERFORM bdc_field   USING  'RF05A-ABPOS'  '1'.
+  PERFORM bdc_dynpro  USING   'SAPDF05X'    '3100'.
+  PERFORM bdc_field   USING   'BDC_OKCODE'  '/00'.
+
+  PERFORM bdc_field   USING   'BDC_CURSOR'  'RF05A-AKOBT'.
+  PERFORM bdc_field   USING   'RF05A-ABPOS' '1'.
+  PERFORM bdc_field   USING   'RF05A-AKOBT' t_indata-wrbtr."'              1000'.
+  PERFORM bdc_dynpro  USING   'SAPDF05X'    '3100'.
+  PERFORM bdc_field   USING   'BDC_OKCODE'  '=BU'.
+  PERFORM bdc_field   USING   'BDC_CURSOR'  'DF05B-PSSKT(01)'.
+  PERFORM bdc_field   USING   'RF05A-ABPOS' '1'.
+*PERFORM bdc_field   USING   'RF05A-AKOBT' '         1,000.00'.
+
+ENDFORM.                    " PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*        Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+
+    ENDIF.
+
+    CONCATENATE t_outdata-desc
+                g_mess
+                INTO t_outdata-desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Success and Error file Download
+*----------------------------------------------------------------------*
+form SUCCESS_ERROR_DOWNLOAD .
+
+  SORT t_outdata BY sort.
+  READ TABLE t_outdata INDEX 1.
+  IF t_outdata-sort = 'A'.
+    CLEAR : t_outdata.
+    t_outdata-xblnr = 'Success'.
+    INSERT t_outdata INTO t_outdata INDEX 1.
+  ENDIF.
+
+  READ TABLE t_outdata WITH KEY sort = 'B'.
+  IF sy-subrc = 0.
+    g_init = sy-tabix.
+    CLEAR : t_outdata.
+    t_outdata-xblnr = 'Error'.
+    INSERT t_outdata INTO t_outdata INDEX g_init.
+    g_init = g_init - 1.
+*      CLEAR t_err.
+    IF g_init IS NOT INITIAL.
+      INSERT INITIAL LINE INTO  t_outdata INDEX g_init.
+    ENDIF.
+  ENDIF.
+*Download error and Success files
+  PERFORM download_result.
+*  ENDIF.
+**Success Download
+*    PERFORM success_download.
+endform.                    " SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+form DOWNLOAD_RESULT .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+  PERFORM download_header_line.
+
+  LOOP AT t_outdata.
+    MOVE-CORRESPONDING t_outdata TO t_rest.
+*    IF t_outdata-xblnr = 'Erro'.
+*
+*      t_rest-xblnr = 'Error '.
+*
+*    ELSEIF t_outdata-xblnr = 'Succ'.
+*      t_rest-xblnr = 'Success '.
+*    ENDIF.
+    APPEND t_rest.
+  ENDLOOP.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_rest[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc = 0.
+    clear t_rest[].
+  ENDIF.
+endform.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*       Header line for output data
+*----------------------------------------------------------------------*
+form DOWNLOAD_HEADER_LINE .
+
+  t_rest-xblnr      = 'Ref.Doc.No.'.
+  t_rest-bktxt      = 'Document Header'.
+  t_rest-augtx      = 'Clearing Text'.
+  t_rest-konto      = 'GL-Account Number'.
+  t_rest-wrbtr      = 'Amount '.
+  t_rest-valut      = 'Value Date'.
+  t_rest-prctr      = 'Profit' .
+  t_rest-sgtxt      = 'Item Text' .
+  t_rest-agkon      = 'Customer Number '.
+  t_rest-kunnr      = 'Customer'.
+  t_rest-desc       = 'Description'.
+  t_rest-d_no       = 'Accounting Document Number'.
+  INSERT  t_rest INDEX 1.
+
+endform.                    " DOWNLOAD_HEADER_LINE

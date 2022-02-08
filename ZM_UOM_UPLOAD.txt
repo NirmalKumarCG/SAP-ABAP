@@ -1,0 +1,597 @@
+
+
+REPORT  ZM_UOM_UPLOAD NO STANDARD PAGE HEADING
+
+*                            MESSAGE-ID zm
+                            LINE-SIZE  100
+                            LINE-COUNT 65.
+***********************************************************************
+* This program uploads a flat file from the PC and creates unit of     *
+* measure for the materials   *                                        *
+* based on the data uploaded by calling transaction MM01.              *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 27.01.2009 | Suresh.G      | Initial program              *
+************************************************************************
+*---------------------------------------------------------------------*
+* Tables
+*---------------------------------------------------------------------*
+TABLES: mara,                       "General Material Data
+        t006.                       "Units of Measurement
+*Type-pools
+TYPE-POOLS : truxs.
+DATA: it_raw TYPE truxs_t_text_data.
+DATA: BEGIN OF t_indata OCCURS 0,
+      matnr like mara-matnr,         "Material Number
+      umren like marm-umren,         "Denominator for conversion to base units of measure
+      meinh like marm-meinh,         "Alternative Unit of Measure for Stockkeeping Unit
+      umrez like marm-umrez,         "Numerator for Conversion to Base Units of Measure
+      meins like mara-meins,         "Base Unit of Measure
+      END OF t_indata.
+
+DATA: BEGIN OF t_outdata OCCURS 0,
+      matnr(20),          "Material Number
+      umren(20),          "Denominator for conversion to base units of measure
+      meinh(20),          "Alternative Unit of Measure for Stockkeeping Unit
+      umrez(20),          "Numerator for Conversion to Base Units of Measure
+      meins(20),          "Base Unit of Measure
+      END OF t_outdata.
+*Variable Declaration
+DATA: v_mbrsh TYPE mara-mbrsh,
+      v_mtart TYPE mara-mtart.
+*Structure For Total No of Success and Error Records
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+*Internal Table To Download The Success and the Error Records
+DATA :BEGIN OF  t_err  OCCURS 0.
+INCLUDE  STRUCTURE t_outdatA.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : END OF t_err.
+DATA : t_ddown LIKE t_indata OCCURS 0 WITH HEADER LINE.
+DATA : w_initial LIKE t_outdatA.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_initial.
+DATA : desc TYPE string.
+DATA : END OF w_init1.
+*Final internal table for Download
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_flag1 TYPE c.
+*Flag Declarations
+DATA : v_flag2,
+       v_flag3,
+       v_flag4.
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK b001 WITH FRAME TITLE text-001.
+PARAMETERS: p_file     LIKE rlgrap-filename OBLIGATORY, " File name
+            p_head AS CHECKBOX ,                        " Header
+            p_TEST AS CHECKBOX.                         "Check only Flag
+PARAMETERS: p_rest      LIKE rlgrap-filename
+                         DEFAULT 'c:\temp\Success.xls' OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK b001.
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_file
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*----------------------------------------------------------------------*
+* Start of Selection                                                   *
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+*Adding the intial line of the xls.
+  PERFORM intial_line.
+*Upload to internal table
+  PERFORM upload_file USING p_file.
+  IF v_flag2 EQ 'X'.
+    CLEAR : v_flag2.
+    WRITE: /01      text-001 ,
+         27        ':',
+         30      sy-repid,
+*          92      text-001,
+         92      sy-pagno,
+        /01      text-003,
+         10      'by',
+         27      ':',
+         30      sy-uname,
+         82      sy-datum DD/MM/YY,
+         92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    ULINE.
+    WRITE : 'Error in Uploading the File'.
+    ULINE.
+    EXIT.
+  ENDIF.
+*If no records in Internal table
+  IF t_indata[] IS INITIAL .
+    WRITE: / 'No records were uploaded'.
+    ULINE.
+    EXIT.
+  ENDIF.
+*   Validate Fields before uploading
+  PERFORM validate_fields.
+*   Checking Whether the Test Only Is Initial
+  IF p_test IS INITIAL.
+*Looping Through The Internal Table To create The Alternative Unit Of measurement
+    LOOP AT t_indata.
+*      PERFORM master_clear.
+      PERFORM create_mat.
+    ENDLOOP.
+  ENDIF.
+*----------------------------------------------------------------------*
+* End of Selection                                                  *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+*Sorting the Success and error files in a internal table
+  IF  t_err[] IS NOT INITIAL.
+   PERFORM ORIGINAL_FORMAT.
+*Sorting The Internal Table By Success and the Error
+    SORT t_err BY sort.
+    READ TABLE t_err INDEX 1.
+    IF t_err-sort = 'A'.
+      CLEAR : t_err.
+      t_err-matnr = 'Success'.
+      INSERT t_err INTO t_err INDEX 1.
+    ENDIF.
+    READ TABLE t_err WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_err.
+      t_err-matnr = 'Errors'.
+      INSERT t_err INTO t_err INDEX g_init.
+      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+  WRITE:     /01      text-001 ,
+              27        ':',
+              30     sy-repid,
+*          92      text-001,
+              92      sy-pagno,
+             /01      text-003,
+              10      'By',
+              27      ':',
+              30      sy-uname,
+              82      sy-datum DD/MM/YY,
+              92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  IF v_flag1 EQ 'X'.
+    CLEAR v_flag1.
+    WRITE : /01 'Error in Downloading the File'.
+    ULINE.
+*    EXIT.
+  else.
+    if  p_test is initial.
+      WRITE: /01     text-005,
+              25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+    ELSEIF   p_test  IS NOT INITIAL
+         AND t_err[] IS NOT INITIAL.
+        WRITE: /01     text-005,
+                25     p_rest.
+    endif.
+  ENDIF.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   40 tot-read.
+  IF p_test IS INITIAL.
+    WRITE: / 'TOTAL UNIT OF MEASURE CREATED',    40 tot-ok.
+    WRITE: / 'TOTAL UNIT OF MEASURE IN ERROR',   40 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',    40 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',   40 tot-err.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  INTIAL_LINE
+*&---------------------------------------------------------------------*
+*       Assigning the text for the Success and the Error Work Area
+*----------------------------------------------------------------------*
+
+form INTIAL_LINE .
+  w_initial-matnr = 'Material Number'.
+  w_initial-umren = 'X'.
+  w_initial-meinh = 'Alt Uom'.
+  w_initial-umrez = 'Y'.
+  w_initial-meins = 'Standard Uom'.
+endform.                    " INTIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       Uploading the Flat File To The Internal Table
+*----------------------------------------------------------------------*
+form UPLOAD_FILE  using    p_file.
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+       EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+        i_line_header              = p_head
+         i_tab_raw_data             = it_raw
+         i_filename                 = p_file
+       TABLES
+         i_tab_converted_data       = t_indata
+      EXCEPTIONS
+        conversion_failed          = 1
+        OTHERS                     = 2
+               .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag2 = 'X'.
+  ENDIF.
+endform.                    " UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*       Validating the fields before uploading the file
+*----------------------------------------------------------------------*
+
+form VALIDATE_FIELDS .
+  LOOP AT T_INDATA.
+        ADD 1 TO tot-read.
+    DATA: l_matnr(18) TYPE n.
+    TRANSLATE t_indata-matnr TO UPPER CASE.
+    IF NOT t_indata-matnr IS INITIAL.
+      IF t_indata-matnr CO '0123456789 '.
+        l_matnr        = t_indata-matnr.
+        t_indata-matnr = l_matnr.
+        modify t_indata.
+      ENDIF.
+    ENDIF.
+*   Check Material.
+    SELECT SINGLE * FROM mara WHERE matnr EQ t_indata-matnr.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Material'
+                   t_indata-matnr
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+* Validating the Base Unit of Measurement
+    if not t_indata-meins is initial.
+      TRANSLATE t_indata-meins TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+        EXPORTING
+          input                = t_indata-meins
+*       LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_indata-meins
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ELSE.
+     modify t_indata.
+      ENDIF.
+
+    endif.
+* Validating the Alternative Unit of Measurement
+    if not  t_indata-meinh is initial.
+      TRANSLATE t_indata-meinh TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+        EXPORTING
+          input                = t_indata-meinh
+*       LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_indata-meinh
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ELSE.
+      modify t_indata.
+      ENDIF.
+
+    endif.
+*Validating the Base Unit Of Measurement
+    if not t_indata-meins is initial.
+    SELECT SINGLE msehi FROM t006 INTO t006
+                        WHERE msehi = t_indata-meins.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Base Unit of Measurement'
+                   t_indata-meins
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    endif.
+*Validating the Alternative Unit Of Measurement
+    if not t_indata-meinh is initial.
+    SELECT SINGLE msehi FROM t006 INTO t006
+                        WHERE msehi = t_indata-meinh.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Alternative Unit Of Measure'
+                   t_indata-meinh
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    endif.
+*Check whether the material is maintained for correct unit of measure
+    if  not t_indata-matnr is initial
+    and not t_indata-meins is initial.
+    select single * from mara where matnr = t_indata-matnr
+                              and   meins = t_indata-meins.
+      IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Unit Of Measure'
+                   t_indata-meins
+                   'For The Material'
+                   t_indata-matnr
+                   'Is Not Maintained'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    endif.
+  ENDLOOP.
+endform.                    " VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_MAT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+
+form CREATE_MAT .
+*Bapi Declarations
+  DATA:  headdata             LIKE bapimathead,   "Header Segment with Control Information
+         clientdata           LIKE bapi_mara,     "Material Data at Client Level
+         clientdatax          LIKE bapi_marax,    "Checkbox Structure for BAPI_MARA
+         return               LIKE bapiret2.      "Return Parameter
+
+  DATA: marm  TYPE STANDARD TABLE OF bapi_marm       WITH HEADER LINE, "Units of Measure
+        marmx TYPE STANDARD TABLE OF bapi_marmx      WITH HEADER LINE, "Checkbox Structure for BAPI_MARM
+        ret   TYPE STANDARD TABLE OF bapi_matreturn2 WITH HEADER LINE. "Substitute Structure for Return Parameter BAPIRET2
+
+  DATA : l_matnr TYPE i.
+*Clearing The Contents before creating the unit of measure
+  CLEAR: v_mbrsh,
+         v_mtart,
+         headdata,
+         clientdata,
+         clientdatax,
+         return,
+         marm,
+         marmx,
+         ret.
+*Refreshing the Table contents before creating the unit of measure
+  refresh : marm,
+            marmx,
+            ret.
+
+*Get Material Type and Industry Sector.
+  SELECT SINGLE mtart mbrsh FROM mara INTO (v_mtart,v_mbrsh)
+                            WHERE matnr = t_indata-matnr.
+  IF sy-subrc = 0.
+* Filling Headdata.
+    MOVE: t_indata-matnr   TO headdata-material,
+          v_mbrsh          TO headdata-ind_sector,
+          v_mtart          TO headdata-matl_type,
+          'X'              TO headdata-basic_view.
+
+** Filling Clientdata.
+**    MOVE:  t_indata-meins  TO clientdata-BASE_UOM.
+**
+** FILLING X-STRUCTURES - CLIENTDATA
+**    MOVE:'X' TO clientdatax-BASE_UOM.
+
+* FILLING - Unit Of measure TABLE.
+    MOVE:  t_indata-meinh to marm-ALT_UNIT,
+           t_indata-umren to marm-DENOMINATR,
+           t_indata-umrez to marm-NUMERATOR.
+    APPEND marm.
+* FILLING - Unit Of measure TABLE.
+    MOVE:  t_indata-meinh to marmx-ALT_UNIT,
+           'X'            to marmx-DENOMINATR,
+           'X'            to marmx-NUMERATOR.
+    APPEND marmX.
+
+    CALL FUNCTION 'BAPI_MATERIAL_SAVEDATA'
+      EXPORTING
+       headdata                   = headdata
+            clientdata            = clientdata
+            clientdatax           = clientdatax
+     IMPORTING
+       RETURN                     = return
+     TABLES
+*   MATERIALDESCRIPTION           =
+       UNITSOFMEASURE             = MARM
+       UNITSOFMEASUREX            = MARMX
+*   INTERNATIONALARTNOS           =
+*   MATERIALLONGTEXT              =
+*   TAXCLASSIFICATIONS            =
+       RETURNMESSAGES             = RET
+*   PRTDATA                       =
+*   PRTDATAX                      =
+*   EXTENSIONIN                   =
+*   EXTENSIONINX                  =
+              .
+    IF return-type EQ 'E'.
+      ADD 1 TO tot-err.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err .
+      t_err-sort = 'B'.
+      t_err-desc = return-message.
+      APPEND t_err.
+    ELSE.
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' .
+      ADD 1 TO tot-ok.
+*Success Message
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'A'.
+      t_err-desc = return-message.
+      APPEND t_err.
+    ENDIF.
+  endif.
+endform.                    " CREATE_MAT
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*      Downloading Both the Success and the Error File in a Single
+*     Excel Sheet
+*----------------------------------------------------------------------*
+
+FORM DOWNLOAD_RESULT .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    APPEND t_fdown.
+  ENDLOOP.
+  MOVE-CORRESPONDING w_initial TO w_init1.
+
+
+  INSERT w_init1 INTO t_fdown INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag1 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  ORIGINAL_FORMAT
+*&---------------------------------------------------------------------*
+*       Getting Back The Fields To the Original Format
+*----------------------------------------------------------------------*
+
+FORM ORIGINAL_FORMAT .
+loop at t_err.
+*Conversion routine for Material
+    IF NOT t_err-matnr IS INITIAL.
+      CALL FUNCTION 'CONVERSION_EXIT_MATN1_OUTPUT'
+        EXPORTING
+          input  = t_err-matnr
+        IMPORTING
+          output = t_err-matnr.
+      MODIFY t_err.
+    ENDIF.
+* Validating the Base Unit of Measurement
+    if not t_err-meins is initial.
+      TRANSLATE t_err-meins TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+        EXPORTING
+          input                = t_err-meins
+*       LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_err-meins
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      modify t_ERR.
+    endif.
+* Validating the Base Unit of Measurement
+    if not  t_err-meinh is initial.
+      TRANSLATE t_err-meinh TO UPPER CASE.
+      CALL FUNCTION 'CONVERSION_EXIT_CUNIT_OUTPUT'
+        EXPORTING
+          input                = t_err-meinh
+*       LANGUAGE             = SY-LANGU
+       IMPORTING
+         output               = t_err-meinh
+*     EXCEPTIONS
+*       UNIT_NOT_FOUND       = 1
+*       OTHERS               = 2
+                .
+      IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+      modify t_ERR.
+    endif.
+ENDLOOP.
+ENDFORM.                    " ORIGINAL_FORMAT

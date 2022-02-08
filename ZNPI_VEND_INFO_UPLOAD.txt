@@ -1,0 +1,713 @@
+************************************************************************
+* This program uploads a flat file from the PC and creates Vendor      *
+* Material Info Record based on the data uploaded by                   *
+* calling transaction ME11.                                            *
+************************************************************************
+*----------------------------------------------------------------------*
+* Version# | Date       | Created by           | Description           *
+*----------+----------+------------+-----------------------------------*
+*          | 02.02.2009 | Sathish kumar.S      | Initial program       *
+************************************************************************
+report ZNPI_VEND_INFO_UPLOAD
+       no standard page heading line-size 255.
+*----------------------------------------------------------------------*
+* Tables
+*----------------------------------------------------------------------*
+TABLES: LFA1,   "Vendor Master (General Section)
+        MARA,   "General Material Data
+        T024E,  "Purchasing Organizations
+        T001W,  "Plants/Branches
+        T023,   "Material Groups
+        T006,   "Units of Measurement
+        T024.   "Purchasing Groups
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+*include bdcrecx1.
+* include programs for common processes in interface programs
+DATA  zzret_code LIKE sy-subrc.
+INCLUDE zbdcincl.
+
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename DEFAULT 'c:\temp\venexcise.xls',
+            p_hed       AS CHECKBOX DEFAULT 'X',     " With header line? X or Y for yes
+            p_test      AS CHECKBOX,                 " test run? X or Y for yes
+            p_sess(12)  TYPE c,
+            p_mode.
+PARAMETERS: p_rest      LIKE rlgrap-filename  DEFAULT 'c:\temp\Result.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+*----------------------------------------------------------------------*
+* Data Declaration
+*----------------------------------------------------------------------*
+* input file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_indata OCCURS 0,
+        lifnr like eina-lifnr,         "Vendor Account Number
+        matnr like eina-matnr,         "Material Number
+        ekorg like eine-ekorg,         "Purchasing Organization
+        werks like eine-werks,         "Plant
+        idnlf like eina-idnlf,         "Material Number Used by Vendor
+        verkf like eina-verkf,         "Salesperson Responsible in the Event of Queries
+        telf1 like eina-telf1,         "Vendor's Telephone Number
+        aplfz(3)," like eine-aplfz,         "Planned Delivery Time in Days
+        ekgrp like eine-ekgrp,         "Purchasing Group
+        norbm(17)," like eine-norbm,         "Standard Purchase Order Quantity
+        netpr(14)," like eine-netpr,         "Net Price in Purchasing Info Record
+        date(10),                      "Condition date (This fielded added on 17-04-2009)
+        desc  type string,
+        sort,
+      END OF t_indata.
+
+*Output file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_outdata OCCURS 0.
+        INCLUDE STRUCTURE t_indata.
+ DATA end of t_outdata.
+
+**Output file format for Vendor Material Info Record
+DATA: BEGIN OF t_rest OCCURS 0,
+        lifnr(10),         "Vendor Account Number
+        matnr(18),         "Material Number
+        ekorg(9),          "Purchasing Organization
+        werks(5),          "Plant
+        idnlf(35),         "Material Number Used by Vendor
+        verkf(30),         "Salesperson Responsible in the Event of Queries
+        telf1(16),         "Vendor's Telephone Number
+        aplfz(12),          "Planned Delivery Time in Days
+        ekgrp(11),          "Purchasing Group
+        norbm(13),         "Standard Purchase Order Quantity
+        netpr(11),         "Net Price in Purchasing Info Record
+        date(10),          "Condition date (This fielded added on 17-04-2009)
+*        meins(3),          "Purchase Order Unit of Measure
+*        sortl(10),         "Sort Term for Non-Stock Info Records
+        desc type string,
+*        sort,
+      END OF t_rest.
+
+DATA: it_raw  TYPE truxs_t_text_data.
+*
+DATA:  w_upllen            TYPE i VALUE 2000,
+       err_msg(100)        TYPE c,
+       sap_venno           LIKE lfa1-lifnr,
+       batch_name(30)      TYPE c,
+       v_open.
+
+* Constants
+CONSTANTS: c_trans(4)    VALUE 'ME11', " transaction used
+           delimiter(1)  VALUE ','.
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+
+*To store how much datas have read
+DATA: BEGIN OF tot,
+        ok                 TYPE i,
+        read               TYPE i,
+        err                TYPE i,
+      END OF tot.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c.
+
+*----------------------------------------------------------------------*
+* At Selection-Screen for upload and download file
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_upl.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_rest.
+
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+  IF p_upl IS INITIAL.
+    MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Validating Download File Path
+  IF p_rest IS INITIAL.
+    MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+  IF p_sess IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  IF p_mode IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+*To upload input File
+  PERFORM 100_upload_file.
+  IF t_indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+  ENDIF.
+
+*Validation of Fields before uploading
+  PERFORM field_validation.
+
+  IF p_test IS INITIAL.
+    if not t_indata[] is initial.
+      LOOP AT t_indata.
+        PERFORM create_vend_info_record.
+      ENDLOOP.
+    endif.
+*  else.
+*    PERFORM test_only_result.
+  ENDIF.
+
+*----------------------------------------------------------------------*
+*  End Of Selection
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+  IF NOT t_outdata[] IS INITIAL.
+*To Download error file.
+    PERFORM success_error_download.
+  ENDIF.
+  WRITE: /01      text-001 ,
+           31        ':',
+           36      sy-repid,
+*          92      text-001,
+           92      sy-pagno,
+          /01      text-002,
+           10      'by',
+           31      ':',
+           36      sy-uname,
+           82      sy-datum DD/MM/YY,
+           92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  WRITE: /01     text-003,
+          25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   38 tot-read.
+  IF p_test IS INITIAL.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL VENDOR INFO RECORD CREATED',    38 tot-ok.
+    WRITE: / 'TOTAL VENDOR INFO RECORD IN ERROR',   38 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',    38 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',   38 tot-err.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       To upload input File
+*----------------------------------------------------------------------*
+FORM 100_UPLOAD_FILE .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      i_line_header        = p_hed
+      i_tab_raw_data       = it_raw
+      i_filename           = p_upl
+    TABLES
+      i_tab_converted_data = t_indata.
+
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  FIELD_VALIDATION                                         *
+*&---------------------------------------------------------------------*
+*       Validate Fields before uploading                               *
+*----------------------------------------------------------------------*
+FORM field_validation.
+
+DATA: v_matnr(18) TYPE n,
+      v_werks(4)  TYPE n,
+      v_ekgrp(3)  TYPE n,
+      v_ekorg(4)  TYPE n.
+
+*DATA: v_meins like t006-msehi.
+ LOOP AT t_indata.
+    ADD 1 to tot-read.
+    IF not t_indata-lifnr IS INITIAL.
+       CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+         EXPORTING
+           INPUT         = t_indata-lifnr
+        IMPORTING
+          OUTPUT        = t_indata-lifnr.
+
+       select single lifnr from lfa1
+                           into lfa1-lifnr
+                          where lifnr = t_indata-lifnr.
+       if sy-subrc ne 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING t_indata TO t_outdata.
+          t_outdata-sort = 'B'.
+          CONCATENATE 'No master record exists for vendor '
+                      t_indata-lifnr
+                INTO  t_outdata-desc.
+          APPEND t_outdata.
+          DELETE t_indata.
+          CONTINUE.
+       endif.
+    ELSE.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-sort = 'B'.
+      t_outdata-desc = 'Please enter at least one vendor'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+    IF NOT t_indata-matnr IS INITIAL.
+        IF t_indata-matnr CO '0123456789 '.
+           v_matnr = t_indata-matnr.
+           t_indata-matnr = v_matnr.
+           modify t_indata.
+        ELSE.
+           translate t_indata-matnr TO UPPER CASE.
+        ENDIF.
+        select single matnr from mara
+                            into mara-matnr
+                           where matnr = t_indata-matnr.
+        if sy-subrc ne 0.
+           ADD 1 TO tot-err.
+           MOVE-CORRESPONDING t_indata TO t_outdata.
+           t_outdata-sort = 'B'.
+           CONCATENATE 'The material '
+                       t_indata-matnr
+                       ' does not exist or is not activated'
+                  INTO  t_outdata-desc.
+           APPEND t_outdata.
+           DELETE t_indata.
+           CONTINUE.
+        endif.
+    ELSE.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-sort = 'B'.
+      t_outdata-desc = 'Please enter at least one material'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+    IF NOT t_indata-ekorg IS INITIAL.
+       IF t_indata-ekorg CO '0123456789 '.
+          v_ekorg = t_indata-ekorg.
+          t_indata-ekorg = v_ekorg.
+       ELSE.
+         TRANSLATE t_indata-ekorg TO  UPPER CASE.
+       ENDIF.
+       select single ekorg from t024e
+                           into t024e-ekorg
+                          where ekorg = t_indata-ekorg.
+       if sy-subrc ne 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING t_indata TO t_outdata.
+          t_outdata-sort = 'B'.
+          CONCATENATE 'Purchase Organization '
+                      t_indata-ekorg
+                      ' does not exist or is not activated'
+                 INTO  t_outdata-desc.
+          APPEND t_outdata.
+          DELETE t_indata.
+          CONTINUE.
+       endif.
+    ELSE.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-sort = 'B'.
+      t_outdata-desc = 'Purchase Organization is mandatory'.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+    IF NOT t_indata-werks IS INITIAL.
+        IF t_indata-werks CO '0123456789 '.
+           v_werks = t_indata-werks.
+           t_indata-werks = v_werks.
+           modify t_indata.
+        ELSE.
+           translate t_indata-werks TO UPPER CASE.
+        ENDIF.
+        select single werks from t001w
+                            into t001w-werks
+                           where werks = t_indata-werks.
+        if sy-subrc ne 0.
+           ADD 1 TO tot-err.
+           MOVE-CORRESPONDING t_indata TO t_outdata.
+           t_outdata-sort = 'B'.
+           CONCATENATE 'Plant '
+                        t_indata-werks
+                        ' does not exist or is not activated'
+                  INTO  t_outdata-desc.
+           APPEND t_outdata.
+           DELETE t_indata.
+           CONTINUE.
+        endif.
+    ELSE.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-sort = 'B'.
+      t_outdata-desc = 'Plant is Mandatory '.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+    IF not t_indata-ekgrp IS INITIAL.
+       v_ekgrp        = t_indata-ekgrp.
+       t_indata-ekgrp = v_ekgrp.
+       modify t_indata.
+
+       select single ekgrp from t024
+                           into t024-ekgrp
+                          where ekgrp = t_indata-ekgrp.
+       if sy-subrc ne 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING t_indata TO t_outdata.
+          t_outdata-sort = 'B'.
+          CONCATENATE 'Purchasing group '
+                      t_indata-ekgrp
+                      ' does not exist or is not activated'
+                INTO  t_outdata-desc.
+          APPEND t_outdata.
+          DELETE t_indata.
+          CONTINUE.
+       endif.
+    ELSE.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_outdata.
+      t_outdata-sort = 'B'.
+      t_outdata-desc = 'Purchasing group is mandatory '.
+      APPEND t_outdata.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+
+    IF t_indata-aplfz IS INITIAL.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-sort = 'B'.
+       t_outdata-desc = 'Planned Delv Time is mandatory '.
+       APPEND t_outdata.
+       DELETE t_indata.
+       CONTINUE.
+    ENDIF.
+
+    IF t_indata-norbm IS INITIAL.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-sort = 'B'.
+       t_outdata-desc = 'Standard Purchase Order Quantity is mandatory '.
+       APPEND t_outdata.
+       DELETE t_indata.
+       CONTINUE.
+    ENDIF.
+
+    IF t_indata-netpr IS INITIAL.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-sort = 'B'.
+       t_outdata-desc = 'Net Price in Purchasing Info Record is mandatory '.
+       APPEND t_outdata.
+       DELETE t_indata.
+       CONTINUE.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.                    " FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*&      Form  create_vend_info_record                                  *
+*&---------------------------------------------------------------------*
+*     Create the Vendor material information details from upload file  *
+*----------------------------------------------------------------------*
+FORM create_vend_info_record .
+
+  CLEAR: err_msg,
+         batch_name.
+
+  PERFORM do_me11_by_calltran
+                     TABLES t_indata
+                     USING  p_mode        "Show errors only
+                            err_msg
+                            batch_name
+                            sap_venno.
+
+*PERFORM bdc_transaction using 'VD51'.
+  CALL TRANSACTION 'ME11' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+  IF sy-subrc NE 0.
+    zzret_code = sy-subrc.
+    IF v_open NE 'X'.
+      PERFORM bdc_open_group USING p_sess.
+      v_open = 'X'.
+    ENDIF.
+    PERFORM bdc_insert USING 'ME11'.
+  ELSE.
+    zzret_code = 0.
+  ENDIF.
+  IF zzret_code = 0.
+    sap_venno = sy-msgv1.
+  ELSE.
+    CLEAR sap_venno.
+  ENDIF.
+
+  READ TABLE messtab WITH  KEY msgtyp = 'E'.
+  IF sy-subrc =  0.
+    ADD 1 TO tot-err.
+*Error File
+    MOVE-CORRESPONDING t_indata TO t_outdata.
+    t_outdata-sort = 'B'.
+*Get the Error details
+    PERFORM format_message.
+    APPEND t_outdata.
+  ELSE.
+    ADD 1 TO tot-ok.
+*Success Message
+    MOVE-CORRESPONDING t_indata TO t_outdata.
+    t_outdata-sort = 'A'.
+    APPEND t_outdata.
+  ENDIF.
+
+  IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+  ENDIF.
+  REFRESH bdcdata.
+  clear : v_open,
+          messtab.
+  refresh : messtab.
+
+ENDFORM.                    " create_vend_info_record
+*&---------------------------------------------------------------------*
+*&      Form  DO_ME11_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*      Fill the appropriate screens for the transaction and            *
+*       Call transaction me11 (Maintain Vendor-Material Info).         *
+*----------------------------------------------------------------------*
+FORM do_me11_by_calltran  TABLES   p_t_indata STRUCTURE t_indata
+                          USING    p_p_mode
+                                   p_err_msg
+                                   p_batch_name
+                                   p_sap_venno.
+  clear t_outdata.
+  PERFORM process_screen_100.
+  PERFORM process_screen_101.
+  PERFORM process_screen_102.
+ENDFORM.                    " DO_ME11_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*       This is the initial screen of vd51 - where customer-material   *
+*       is maintained                                                  *
+*----------------------------------------------------------------------*
+FORM process_screen_100 .
+
+PERFORM   bdc_dynpro    using 'SAPMM06I'     '0100'.
+PERFORM   bdc_field     using 'BDC_CURSOR'   'EINA-LIFNR'.
+PERFORM   bdc_field     using 'BDC_OKCODE'   '/00'.
+PERFORM   bdc_field     using 'EINA-LIFNR'   t_indata-lifnr."'100020'.
+PERFORM   bdc_field     using 'EINA-MATNR'   t_indata-matnr.
+PERFORM   bdc_field     using 'EINE-EKORG'   t_indata-ekorg.
+PERFORM   bdc_field     using 'EINE-WERKS'   t_indata-werks.
+*PERFORM   bdc_field     using 'EINA-INFNR'   ''.
+PERFORM   bdc_field     using 'RM06I-NORMB'  'X'.
+
+ENDFORM.                    " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_101
+*&---------------------------------------------------------------------*
+*       This is the screen consisting of all details on                *
+*       vendor material info record                                    *
+*----------------------------------------------------------------------*
+FORM process_screen_101.
+
+PERFORM bdc_dynpro   using 'SAPMM06I'       '0101'.
+PERFORM bdc_field    using 'BDC_CURSOR'     'EINA-IDNLF'.
+PERFORM bdc_field    using 'BDC_OKCODE'     '=EINE'.
+PERFORM bdc_field    using 'EINA-IDNLF'     t_indata-idnlf."'(020)66494100'.
+PERFORM bdc_field    using 'EINA-VERKF'     t_indata-verkf."'(020)66494100'.
+PERFORM bdc_field    using 'EINA-TELF1'     t_indata-telf1."'(020)66494100'.
+
+
+ENDFORM.                    " PROCESS_SCREEN_101
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_102
+*&---------------------------------------------------------------------*
+*       This is the screen consisting of all details on                *
+*       vendor material info record                                    *
+*----------------------------------------------------------------------*
+FORM process_screen_102.
+
+PERFORM bdc_dynpro      using 'SAPMM06I'        '0102'.
+PERFORM bdc_field       using 'BDC_CURSOR'      'EINE-APLFZ'.
+PERFORM bdc_field       using 'BDC_OKCODE'      '=KO'.
+PERFORM bdc_field       using 'EINE-APLFZ'      t_indata-aplfz.
+PERFORM bdc_field       using 'EINE-EKGRP'      t_indata-ekgrp.
+PERFORM bdc_field       using 'EINE-NORBM'      t_indata-norbm.
+PERFORM bdc_field       using 'EINE-NETPR'      t_indata-netpr.
+
+*Changed on 17-04-2009 for addition of condition date field
+PERFORM bdc_dynpro      using 'SAPMV13A'          '0201'.
+PERFORM bdc_field       using 'BDC_CURSOR'        'RV13A-DATAB'.
+PERFORM bdc_field       using 'BDC_OKCODE'        '=SICH'.
+PERFORM bdc_field       using 'RV13A-DATAB'       t_indata-date."'31.12.2009'.
+*perform bdc_field       using 'RV13A-DATBI'       '31.12.9999'.
+*Changed on 17-04-2009 for addition of condition date field
+ENDFORM.                    " PROCESS_SCREEN_102
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*        Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+
+    ENDIF.
+    clear t_outdata-desc.
+    CONCATENATE t_outdata-desc
+                g_mess
+                INTO t_outdata-desc SEPARATED BY space.
+  endloop.
+
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  TEST_ONLY_RESULT
+*&---------------------------------------------------------------------*
+*       To move success files to result files on  test only
+*----------------------------------------------------------------------*
+form TEST_ONLY_RESULT .
+
+endform.                    " TEST_ONLY_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Success and Error file Download
+*----------------------------------------------------------------------*
+form SUCCESS_ERROR_DOWNLOAD.
+
+    SORT t_outdata BY sort.
+    READ TABLE t_outdata INDEX 1.
+    IF t_outdata-sort = 'A'.
+      CLEAR : t_outdata.
+      t_outdata-lifnr = 'Success'.
+      INSERT t_outdata INTO t_outdata INDEX 1.
+    ENDIF.
+
+    READ TABLE t_outdata WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_outdata.
+      t_outdata-lifnr = 'Errors'.
+      INSERT t_outdata INTO t_outdata INDEX g_init.
+      g_init = g_init - 1.
+
+      IF g_init IS NOT INITIAL.
+        g_init = g_init + 1.
+        INSERT INITIAL LINE INTO  t_outdata INDEX g_init.
+      ENDIF.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+
+endform.                    " SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+form DOWNLOAD_RESULT .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+  PERFORM download_header_line.
+
+  LOOP AT t_outdata.
+    MOVE-CORRESPONDING t_outdata TO t_rest.
+    APPEND t_rest.
+  ENDLOOP.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_rest[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc = 0.
+    clear t_rest[].
+  ENDIF.
+endform.                    " DOWNLOAD_RESULT
+
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*       Header line for output data
+*----------------------------------------------------------------------*
+form DOWNLOAD_HEADER_LINE .
+  t_rest-lifnr = 'Vendor'.
+  t_rest-matnr = 'Material'.
+  t_rest-ekorg = 'Purc Org'.
+  t_rest-werks = 'Plant'.
+  t_rest-idnlf = 'Vendor Material No'.
+  t_rest-verkf = 'Sales Person'.
+  t_rest-telf1 = 'Telephone'.
+  t_rest-aplfz = 'Pl Delv Time'.
+  t_rest-ekgrp = 'Purch Group'.
+  t_rest-norbm = 'Standard Qty'.
+  t_rest-netpr = 'Net Price'.
+  t_rest-date  = 'Date'.
+  t_rest-desc    = 'Description'.
+  INSERT  t_rest INDEX 1.
+endform.                    " DOWNLOAD_HEADER_LINE

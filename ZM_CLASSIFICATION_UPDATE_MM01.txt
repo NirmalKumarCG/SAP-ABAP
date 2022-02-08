@@ -1,0 +1,625 @@
+report ZM_CLASSIFICATION_UPDATE_MM01
+       NO STANDARD PAGE HEADING
+                            LINE-SIZE  100
+                            LINE-COUNT 65.
+************************************************************************
+* This program uploads a flat file from the PC and uploades the         *
+* Classification Details by calling transaction MM01.*
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 12.04.2009 | Suresh G      | Initial program              *
+************************************************************************
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+*Tables
+TABLES : mara,
+         t134.
+TYPE-POOLS : truxs.
+* include program for common routines for interface programs
+DATA: zzret_code LIKE sy-subrc,
+      v_open.
+DATA: it_raw TYPE truxs_t_text_data.
+* constants - these values will stay the same
+CONSTANTS: c_tcode(4)      TYPE c   VALUE 'MM01'.
+
+DATA: w_upllen             TYPE i   VALUE '2000',
+      err_msg(100)         TYPE c,
+*      sap_cusno            LIKE kna1-kunnr,
+      batch_name(30)       TYPE c.
+
+* table for transaction status
+DATA: BEGIN OF status_tab OCCURS 0,
+        status(10),
+        btc_sess(12)       TYPE c,
+*        cus_no             LIKE kna1-kunnr,
+        message(100),
+      END OF status_tab.
+
+DATA: BEGIN OF inrec OCCURS 0,
+        filler(3000),
+      END OF inrec.
+* format of the input file
+DATA: BEGIN OF t_indata OCCURS 0,
+      matnr      TYPE mara-matnr,        "Material Number
+      mtart      TYPE mara-mtart,        "Material Type
+      mbrsh      TYPE mara-mbrsh,        "Industry Sector
+      END OF t_indata.
+*Format for Download file
+DATA: BEGIN OF t_outdat OCCURS 0,
+      matnr(20),            "Material Number
+      mtart(20),            "Material Type
+      mbrsh(20),            "Industry Sector
+      END OF t_outdat.
+
+DATA: l_matnr(30),
+     l_werks(30),
+     l_chapter(30),
+     l_mattype(30),
+     l_grref(30).
+*Calculating the total number of records
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+DATA: v_msgno LIKE sy-msgno.
+
+DATA :BEGIN OF  t_err  OCCURS 0.
+INCLUDE  STRUCTURE t_outdat.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : END OF t_err.
+*Message tab for BDC
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+DATA : t_ddown LIKE t_indata OCCURS 0 WITH HEADER LINE.
+DATA : w_initial LIKE t_outdat.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_initial.
+DATA : desc TYPE string.
+DATA : END OF w_init1.
+*Final internal table for Download
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_flag1 TYPE c.
+INCLUDE zbdcincl.
+
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename DEFAULT 'c:\temp\parbcust.xls',
+            p_head       AS CHECKBOX DEFAULT 'X',     " With header line? X or Y for yes
+            p_test      AS CHECKBOX,     " test run? X or Y for yes
+            p_sess(12)  TYPE c ,
+            p_mode     .
+PARAMETERS: p_rest      LIKE rlgrap-filename
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*include bdcrecx1.
+
+*Start-Of-Selection
+start-of-selection.
+*Perform To Upload The File
+  PERFORM 100_upload_file.
+  IF v_flag EQ 'X'.
+    CLEAR : v_flag.
+    WRITE: /01      text-001 ,
+         27        ':',
+         30      sy-repid,
+*          92      text-001,
+         92      sy-pagno,
+        /01      text-003,
+         10      'by',
+         27      ':',
+         30      sy-uname,
+         82      sy-datum DD/MM/YY,
+         92      sy-uzeit.
+
+  ULINE.
+    SKIP 1.
+    ULINE.
+    WRITE : 'Error in Uploading the File'.
+    ULINE.
+    EXIT.
+  ELSE.
+    CLEAR : v_flag.
+  ENDIF.
+*Checking Whether the Internal table is initial or not
+  IF t_indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+    EXIT.
+  ENDIF.
+*Adding the intial line of the xls.
+  PERFORM initial_line.
+  PERFORM validate_fields.
+  IF p_test IS INITIAL.
+    PERFORM create_Classification_Material.
+  ENDIF.
+
+*perform open_group.
+*----------------------------------------------------------------------*
+* End of Selection                                                  *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+*Sorting the Success and error files in a internal table
+  IF  t_err[] IS NOT INITIAL.
+    SORT t_err BY sort.
+    READ TABLE t_err INDEX 1.
+    IF t_err-sort = 'A'.
+      CLEAR : t_err.
+      t_err-matnr = 'Success'.
+      INSERT t_err INTO t_err INDEX 1.
+    ENDIF.
+    READ TABLE t_err WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_err.
+      t_err-matnr = 'Errors'.
+      INSERT t_err INTO t_err INDEX g_init.
+      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+  WRITE:     /01      text-001 ,
+              27        ':',
+              30     sy-repid,
+*          92      text-001,
+              92      sy-pagno,
+             /01      text-003,
+              10      'By',
+              27      ':',
+              30      sy-uname,
+              82      sy-datum DD/MM/YY,
+              92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  IF v_flag1 EQ 'X'.
+    CLEAR v_flag1.
+    WRITE : /01 'Error in Downloading the File'.
+    ULINE.
+*    EXIT.
+else.
+  if  p_test is initial.
+  WRITE: /01     text-005,
+          25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+  endif.
+    ENDIF.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   50 tot-read.
+  IF p_test IS INITIAL.
+    WRITE: / 'TOTAL ClASSIFICATION FOR THE MATERIAL CREATED',    50 tot-ok.
+    WRITE: / 'TOTAL CLASSIFICATION FOR THE MATERIAL IN ERROR',   50 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',    40 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',   40 tot-err.
+  ENDIF.
+
+*perform bdc_transaction using 'MM01'.
+
+*perform close_group.
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*      Upload File From Excel To Internal Table
+*----------------------------------------------------------------------*
+
+FORM 100_UPLOAD_FILE .
+ CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+      i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_upl
+     TABLES
+       i_tab_converted_data       = t_indata
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag = 'X'.
+  ENDIF.
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  INITIAL_LINE
+*&---------------------------------------------------------------------*
+*       Initial Line
+*----------------------------------------------------------------------*
+
+FORM INITIAL_LINE .
+ w_initial-matnr       = 'Material Number'.
+  w_initial-mtart      = 'Material Type'.
+  w_initial-mbrsh      = 'Industry Sector'.
+ENDFORM.                    " INITIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_CLASSIFICATION_MATERIAL
+*&---------------------------------------------------------------------*
+*       BDC _Part
+*----------------------------------------------------------------------*
+
+FORM CREATE_CLASSIFICATION_MATERIAL .
+CLEAR: err_msg,
+         batch_name,
+         t_err.
+  LOOP AT t_indata.
+    PERFORM do_mm01_by_calltran
+                       TABLES t_indata
+                       USING  p_mode        "Show errors only
+                              err_msg
+                              batch_name.
+*  perform bdc_transaction using 'J1ID'.
+    CALL TRANSACTION 'MM01' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+    IF sy-subrc NE 0.
+      IF messtab[] IS INITIAL.
+      ADD 1 TO tot-err.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err .
+      t_err-sort = 'B'.
+*Get the Error details
+      t_err-desc = 'Error in Creating Tax Classification View'.
+      APPEND t_err.
+      ENDIF.
+      zzret_code = sy-subrc.
+      IF v_open NE 'X'.
+        PERFORM bdc_open_group USING p_sess.
+        v_open = 'X'.
+      ENDIF.
+      PERFORM bdc_insert USING 'MM01'.
+    ELSE.
+      zzret_code = 0.
+    ENDIF.
+*  IF zzret_code = 0.
+**    sap_venno = sy-msgv1.
+*  ELSE.
+**    CLEAR sap_venno.
+*  ENDIF.
+*Start of Mod002
+    if not messtab[] is initial.
+    READ TABLE messtab WITH  KEY msgtyp = 'E'.
+    IF sy-subrc =  0.
+      ADD 1 TO tot-err.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err .
+      t_err-sort = 'B'.
+*    t_outdata-sort = 'B'.
+*Get the Error details
+      PERFORM format_message.
+      APPEND t_err.
+    ELSE.
+      ADD 1 TO tot-ok.
+*Success Message
+      MOVE-CORRESPONDING t_indata TO t_err.
+*    CONCATENATE MESSTAB-msgv1
+*                'Created Successfully'
+*                INTO t_err-desc.
+*    t_outdata-sort = 'A'.
+      t_err-sort = 'A'.
+      T_ERR-desc = 'Classification View Updated Successfully'.
+      APPEND t_err.
+    ENDIF.
+    endif.
+*If Any errors in Bdc Transfer to Session
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+*End of Mod002
+    REFRESH bdcdata.
+    CLEAR : l_matnr,
+            l_werks,
+            l_chapter,
+            l_mattype,
+            l_grref,
+            v_open,
+            g_mess,
+            messtab,
+            t_err
+            .
+    REFRESH : messtab.
+  ENDLOOP.
+ENDFORM.                    " CREATE_CLASSIFICATION_MATERIAL
+*&---------------------------------------------------------------------*
+*&      Form  DO_MM01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM DO_MM01_BY_CALLTRAN  TABLES   P_T_INDATA STRUCTURE t_indata
+                                     "Insert correct name for <...>
+                          USING    P_P_MODE
+                                   P_ERR_MSG
+                                   P_BATCH_NAME.
+perform process_screen_60.
+perform process_screen_70.
+perform process_screen_602.
+perform process_screen_500.
+perform process_screen_109.
+perform process_screen_500_save.
+ENDFORM.                    " DO_MM01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_60
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM PROCESS_SCREEN_60 .
+perform bdc_dynpro      using 'SAPLMGMM' '0060'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'RMMG1-MATNR'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '/00'.
+perform bdc_field       using 'RMMG1-MATNR'
+                              t_indata-matnr.
+perform bdc_field       using 'RMMG1-MBRSH'
+                              t_indata-mbrsh.
+perform bdc_field       using 'RMMG1-MTART'
+                              t_indata-mtart.
+ENDFORM.                    " PROCESS_SCREEN_60
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_70
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM PROCESS_SCREEN_70 .
+perform bdc_dynpro      using 'SAPLMGMM' '0070'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'MSICHTAUSW-DYTXT(03)'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '=ENTR'.
+perform bdc_field       using 'MSICHTAUSW-KZSEL(03)'
+                              'X'.
+ENDFORM.                    " PROCESS_SCREEN_70
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_602
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM PROCESS_SCREEN_602 .
+perform bdc_dynpro      using 'SAPLCLCA' '0602'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'RMCLF-KLART'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '=ENTE'.
+perform bdc_field       using 'RMCLF-KLART'
+                              '023'.
+
+ENDFORM.                    " PROCESS_SCREEN_602
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_500
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM PROCESS_SCREEN_500 .
+perform bdc_dynpro      using 'SAPLCLFM' '0500'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'RMCLF-CLASS(01)'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '/00'.
+perform bdc_field       using 'RMCLF-CLASS(01)'
+                              'Z023_001'.
+ENDFORM.                    " PROCESS_SCREEN_500
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_109
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM PROCESS_SCREEN_109 .
+perform bdc_dynpro      using 'SAPLCTMS' '0109'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'RCTMS-MNAME(01)'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '=BACK'.
+ENDFORM.                    " PROCESS_SCREEN_109
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_500_SAVE
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM PROCESS_SCREEN_500_SAVE .
+perform bdc_dynpro      using 'SAPLCLFM' '0500'.
+perform bdc_field       using 'BDC_CURSOR'
+                              'RMCLF-CLASS(01)'.
+perform bdc_field       using 'BDC_OKCODE'
+                              '=SAVE'.
+perform bdc_field       using 'RMCLF-PAGPOS'
+                              '1'.
+ENDFORM.                    " PROCESS_SCREEN_500_SAVE
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       BDC Part
+*----------------------------------------------------------------------*
+
+FORM FORMAT_MESSAGE .
+LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+*    CONCATENATE t_outdata-desc
+*                g_mess
+*                INTO t_outdata-desc SEPARATED BY space.
+    CONCATENATE
+                t_err-desc
+                g_mess
+                INTO t_err-desc SEPARATED BY space.
+*    t_err-desc = g_mess.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*     Validating The Fields
+*----------------------------------------------------------------------*
+
+FORM VALIDATE_FIELDS .
+DATA: l_matnr(18) TYPE n.
+  LOOP AT t_indata.
+    CLEAR: l_matnr.
+    ADD 1 TO tot-read.
+    TRANSLATE t_indata-matnr TO UPPER CASE.
+    IF NOT t_indata-matnr IS INITIAL.
+      IF t_indata-matnr CO '0123456789 '.
+        l_matnr        = t_indata-matnr.
+        t_indata-matnr = l_matnr.
+        modify t_indata.
+      ENDIF.
+    elseif t_indata-matnr is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Material Number'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+* Validating the Material Type
+    if not t_indata-mtart is initial.
+      TRANSLATE t_indata-mtart TO UPPER CASE.
+      SELECT SINGLE mtart FROM t134 INTO t134
+                          WHERE mtart = t_indata-mtart.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        MOVE-CORRESPONDING t_indata TO t_err.
+        t_err-sort = 'B'.
+        CONCATENATE  'Material Type'
+                     t_indata-mtart
+                     'Does not Exist in the SAP System'
+                     INTO t_err-desc
+                     SEPARATED BY space.
+        APPEND t_err.
+        DELETE t_indata.
+        CONTINUE.
+      ENDIF.
+    elseif t_indata-mtart is initial.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      t_err-desc = 'Please Enter The Material Type'.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    endif.
+    endloop.
+ENDFORM.                    " VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download Result
+*----------------------------------------------------------------------*
+
+FORM DOWNLOAD_RESULT .
+DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    APPEND t_fdown.
+  ENDLOOP.
+  MOVE-CORRESPONDING w_initial TO w_init1.
+
+
+  INSERT w_init1 INTO t_fdown INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag1 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_RESULT

@@ -1,0 +1,802 @@
+*----------------------------------------------------------------------*
+* Report       : Z_CUSTOMER_CREDIT_MGMT                                *
+* Version      : 1.0                                                   *
+* Application  : FI-CO                                                 *
+* Date created : 25.02.2009                                            *
+* Description  : Creation of Customer Credit                           *
+*                                                                      *
+*----------------------------------------------------------------------*
+* Modification History                                                 *
+*----------------------------------------------------------------------*
+*  |Date      |Programmer      | Description                           *
+*----------------------------------------------------------------------*
+* |27.03.2008|Karthikeyan Sukumar |Upload of Customer Credit using bdc *
+* |22.04.2008|Sathish kumar.S     |Upload of Customer Credit using bdc *
+*----------------------------------------------------------------------*
+
+report Z_CUSTOMER_CREDIT_MGMT no standard page heading line-size 255.
+include bdcrecx1.
+
+Tables: Knb1,
+        knkk.           "Customer master credit management: Control area data
+
+TYPE-POOLS : truxs.
+DATA : it_raw  TYPE truxs_t_text_data.
+
+TYPES : BEGIN OF ty_table,
+         kunnr   type kna1-kunnr,        "Customer
+         kkber   type RF02L-kkber,       "Credit Control Area
+         KLIMG   type KNKA-KLIMG,        "Total Amount
+         KLIME   type KNKA-KLIME,        "Individual Limit
+         WAERS   type KNKA-WAERS,        "Currency
+         KLIMK   type KNKK-KLIMK,        "Credit limit
+         CTLPC   type KNKK-CTLPC,        "Risk Category
+         cust    type kna1-kunnr,
+        END OF ty_table.
+
+TYPES : BEGIN OF ty_table1,
+         kunnr(30),    "Customer
+         kkber(4),     "Credit Control Area
+         KLIMG(19),    "Total Amount
+         KLIME(19),    "Individual Limit
+         WAERS(5),     "Currency
+         KLIMK(19),    "Credit limit
+         CTLPC(3),     "Risk Category
+         comments(2000),
+        END OF ty_table1.
+
+
+*-----Work area declarations.
+DATA: x_table   TYPE ty_table,
+      x_table1  TYPE ty_table1,
+      l_kunnr(10) type n.
+
+*-----Internal Table declarations.
+DATA : it_table   TYPE TABLE OF ty_table,
+       it_error   TYPE TABLE OF ty_table1,
+       it_success TYPE TABLE OF ty_table1.
+
+DATA : v_succsount(5) TYPE n VALUE 0,
+       v_failcount(5) TYPE n VALUE 0,
+       v_total(7)     TYPE n.
+* *----------------------------------------------------------------------*
+*    SELECTION-SCREEN                                                    *
+**-----------------------------------------------------------------------*
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-001.
+PARAMETERS : p_file   TYPE rlgrap-filename OBLIGATORY,
+             p_header AS CHECKBOX,
+             p_check  AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK b1.
+
+SELECTION-SCREEN BEGIN OF BLOCK b3 WITH FRAME TITLE text-003.
+
+*-----To Download the Error & Success file.
+PARAMETERS: p_efile     TYPE rlgrap-filename OBLIGATORY,
+            p_sfile     TYPE rlgrap-filename ,
+*changed on 22-04-2009
+            p_crt  RADIOBUTTON GROUP rad,
+            p_upd  RADIOBUTTON GROUP rad.
+SELECTION-SCREEN END OF BLOCK b3.
+
+
+*----------------------------------------------------------------------*
+*   AT SELECTION-SCREEN
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON BLOCK b1.
+  IF p_file IS INITIAL.
+    MESSAGE 'Please enter the file path' TYPE 'E'.
+  ENDIF.
+
+AT SELECTION-SCREEN ON BLOCK b3.
+  IF p_efile = p_sfile.
+    MESSAGE 'Please provide diffrent file name' TYPE 'E'.
+  ENDIF.
+  IF p_check NE 'X' AND p_sfile IS INITIAL.
+    MESSAGE 'Please provide the success record download path' TYPE 'E'.
+  ENDIF.
+
+*-----To use F4 help to find file path( Upload File ).
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  CALL FUNCTION 'F4_FILENAME'
+    EXPORTING
+      program_name  = syst-cprog
+      dynpro_number = syst-dynnr
+    IMPORTING
+      file_name     = p_file.
+*-----To use F4 help to find file path( Error File ).
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_efile.
+  CALL FUNCTION 'F4_FILENAME'
+    EXPORTING
+      program_name  = syst-cprog
+      dynpro_number = syst-dynnr
+    IMPORTING
+      file_name     = p_efile.
+
+
+*-----To use F4 help to find file path( Success File ).
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_sfile.
+  CALL FUNCTION 'F4_FILENAME'
+    EXPORTING
+      program_name  = syst-cprog
+      dynpro_number = syst-dynnr
+    IMPORTING
+      file_name     = p_sfile.
+
+
+*----------------------------------------------------------------------*
+*   START-OF-SELECTION
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+  PERFORM 100_upload_file.
+  PERFORM 200_data_check.        "Checking for the data
+  IF p_check NE 'X'.
+    PERFORM 300_perform_bdc.       "Performing bdc
+    PERFORM 400_success_download.  "Success records download
+  ENDIF.
+
+  IF NOT it_error[] IS INITIAL.
+    PERFORM 500_download_errors.
+  ELSE.
+    WRITE : /'File Does not contain any errors'.
+  ENDIF.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  100_upload_file
+*&---------------------------------------------------------------------*
+*       Uploading the File To the Internal Table (it_table)
+*----------------------------------------------------------------------*
+
+FORM 100_upload_file .
+
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+       EXPORTING
+*          I_FIELD_SEPERATOR    =
+            i_line_header        = p_header
+            i_tab_raw_data       = it_raw
+            i_filename           = p_file
+       TABLES
+            i_tab_converted_data = it_table
+      EXCEPTIONS
+           conversion_failed     = 1
+           OTHERS                = 2
+            .
+  IF sy-subrc <> 0.
+    MESSAGE 'Error during the file upload' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.                    " 100_upload_file
+
+*&---------------------------------------------------------------------*
+*&      Form  200_data_check
+*&---------------------------------------------------------------------*
+*       Checking the data
+*----------------------------------------------------------------------*
+
+FORM 200_data_check .
+
+
+
+  DATA :v_flag(1),
+        subrc type sy-subrc.
+
+  LOOP AT it_table INTO x_table.
+
+*-----To check Customer is blank or not.
+    IF x_table-kunnr IS INITIAL.
+      x_table1-comments = 'Customer'.
+      v_flag = 'X'.
+    ENDIF.
+
+
+
+*-----To check Credit Control Area is blank or not.
+    IF x_table-kkber IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Credit Control Area'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Credit Control Area'
+                    INTO x_table1-comments.
+      ENDIF.
+    ENDIF.
+
+*-----To check Total Amount is blank or not.
+    IF x_table-KLIMG IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Total Amount'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Total Amount'
+                    INTO x_table1-comments.
+      ENDIF.
+    ENDIF.
+
+*-----To check Individual Limit is Valid.
+
+    IF x_table-KLIME IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Individual Limit'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Individual Limit'
+                    INTO x_table1-comments.
+      ENDIF.
+
+    ENDIF.
+*-----To check Currency is Valid.
+
+    IF x_table-WAERS IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Currency'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Currency'
+                    INTO x_table1-comments.
+      ENDIF.
+
+    ENDIF.
+
+*-----To check Credit limit is Valid.
+
+    IF x_table-KLIMK IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Credit limit'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Credit limit'
+                    INTO x_table1-comments.
+      ENDIF.
+
+    ENDIF.
+
+*-----To check Risk Category is Valid.
+
+    IF x_table-CTLPC IS INITIAL.
+      IF v_flag NE 'X'.
+        x_table1-comments = 'Risk Category'.
+        v_flag = 'X'.
+      ELSE.
+        CONCATENATE x_table1-comments
+                    ','
+                    'Credit limit'
+                    INTO x_table1-comments.
+      ENDIF.
+
+    ENDIF.
+
+    IF v_flag = 'X'.
+      CONCATENATE x_table1-comments
+                        ' '
+                        'cann''t be blank'
+                        INTO x_table1-comments.
+    ENDIF.
+
+*-----To check Customer Exsit in Table.
+    if not x_Table-kunnr is initial.
+     if x_table-kunnr co '0123456789 '.
+      l_kunnr = x_Table-kunnr .
+       select single * from knb1 where ALTKN = l_kunnr.
+       subrc = sy-subrc.
+     else.
+        select single * from knb1 where ALTKN = x_Table-kunnr.
+        subrc = sy-subrc.
+     endif.
+      if subrc ne 0.
+        IF v_flag NE 'X'.
+          x_table1-comments = 'Prev Customer.No doesn''t Exsist.'.
+          v_flag = 'X'.
+        ELSE.
+          CONCATENATE x_table1-comments
+                      ','
+                      'Customer doesn''t Exsist.'
+                      INTO x_table1-comments.
+        ENDIF.
+      else.
+        x_table-cust = knb1-kunnr.
+        modify it_table from x_table transporting cust.
+      endif.
+    endif.
+
+    IF v_flag = 'X'.
+      MOVE-CORRESPONDING x_table TO x_table1.
+      APPEND x_table1 TO it_error.
+      DELETE it_table.
+      v_failcount = v_failcount + 1.
+      CLEAR: x_table,x_table1,v_flag.
+      CONTINUE.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.                    " 200_data_check
+
+*&---------------------------------------------------------------------*
+*&      Form  300_perform_bdc
+*&---------------------------------------------------------------------*
+
+FORM 300_perform_bdc .
+  perform open_group.
+  LOOP AT it_table INTO x_table.
+*changed on 22-04-2009 for update process
+  if p_upd = 'X'.
+     select single * from knkk
+                     into knkk
+                    where kunnr = x_table-cust.
+     if sy-subrc = 0.
+        if knkk-klimk LE x_table-klimk.  "to increase credit limit for customer
+           PERFORM initial_screen_update.
+           PERFORM central_data_update.
+           PERFORM status_data_update.
+        else.                            "to decrease credit limit for customer
+           PERFORM initial_screen_update1.
+           PERFORM central_data_update1.
+           PERFORM status_data_update1.
+        endif.
+     endif.
+  else.
+    PERFORM initial_screen.
+    PERFORM central_data.
+    PERFORM status_data.
+  endif.
+    perform BDC_commit.
+*-----Error handling.
+    READ TABLE messtab WITH KEY msgtyp = 'E'.
+    MOVE-CORRESPONDING x_table TO x_table1.
+    IF sy-subrc = 0.
+      PERFORM mess_description.
+      APPEND x_table1 TO it_error .
+      v_failcount = v_failcount + 1.
+    ELSE.
+      READ TABLE messtab WITH KEY msgtyp = 'S'.
+      IF sy-subrc = 0.
+        IF ( NOT messtab-msgv1 IS INITIAL AND
+           NOT messtab-msgv2 IS INITIAL AND
+           NOT messtab-msgv3 IS INITIAL ).
+          CONCATENATE messtab-msgv3
+                      ' '
+                      messtab-msgv1
+                      ' '
+                      messtab-msgv2
+                      ' '
+                      'is created'
+                      INTO x_table1-comments.
+        ELSE.
+          PERFORM mess_description.
+        ENDIF.
+        APPEND x_table1 TO it_success.
+        v_succsount = v_succsount + 1.
+      ENDIF.
+    ENDIF.
+
+    CLEAR: x_table1,
+           x_table,
+           messtab.
+    REFRESH messtab[].
+  ENDLOOP.
+  PERFORM close_group.
+
+
+ENDFORM.                    "300_perform_bdc
+
+*&---------------------------------------------------------------------*
+*&      Form  INITIAL_SCREEN
+*&---------------------------------------------------------------------*
+*       Initial screen values are passed
+*----------------------------------------------------------------------*
+
+FORM initial_screen .
+  data : l_customer(10) type N,
+         l_cust(10).
+
+  perform bdc_dynpro      using 'SAPMF02C' '0100'.
+  perform bdc_field       using 'BDC_CURSOR'       'RF02L-D0220'.
+  perform bdc_field       using 'BDC_OKCODE'       '/00'.
+  if x_table-kunnr co '0123456789 '.
+    l_customer = x_table-cust.
+    l_cust     = l_customer.
+    perform bdc_field       using 'RF02L-KUNNR'      l_cust.
+  else.
+    perform bdc_field       using 'RF02L-KUNNR'      x_table-cust.
+  endif.
+
+  perform bdc_field       using 'RF02L-KKBER'      x_table-kkber.
+  perform bdc_field       using 'RF02L-D0120'      'X'.
+  perform bdc_field       using 'RF02L-D0210'      'X'.
+  perform bdc_field       using 'RF02L-D0220'      'X'.
+ENDFORM.                    "initial_screen
+*&---------------------------------------------------------------------*
+*&      Form  INITIAL_SCREEN_update
+*&---------------------------------------------------------------------*
+*       Initial screen values are passed
+*----------------------------------------------------------------------*
+
+FORM initial_screen_update .
+  data : l_customer(10) type N,
+         l_cust(10).
+
+  PERFORM bdc_dynpro      USING 'SAPMF02C'         '0100'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'       'RF02L-KKBER'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'       '/00'.
+  if x_table-kunnr co '0123456789 '.
+    l_customer = x_table-cust.
+    l_cust     = l_customer.
+  PERFORM bdc_field       USING 'RF02L-KUNNR'      l_cust."'600265'.
+  else.
+  PERFORM bdc_field       USING 'RF02L-KUNNR'      x_table-cust."l_cust."'600265'.
+  endif.
+  PERFORM bdc_field       USING 'RF02L-KKBER'      x_table-kkber."'NPIN'.
+  PERFORM bdc_field       USING 'RF02L-D0120'      'X'.
+  PERFORM bdc_field       USING 'RF02L-D0210'      'X'.
+
+
+ENDFORM.                    "initial_screen_update
+*&---------------------------------------------------------------------*
+*&      Form  INITIAL_SCREEN_update1
+*&---------------------------------------------------------------------*
+*       Initial screen values are passed
+*----------------------------------------------------------------------*
+
+FORM initial_screen_update1 .
+  data : l_customer(10) type N,
+         l_cust(10).
+
+PERFORM bdc_dynpro      using 'SAPMF02C'      '0100'.
+PERFORM bdc_field       using 'BDC_CURSOR'    'RF02L-D0210'.
+PERFORM bdc_field       using 'BDC_OKCODE'    '/00'.
+if x_table-kunnr co '0123456789 '.
+  l_customer = x_table-cust.
+  l_cust     = l_customer.
+PERFORM bdc_field       using 'RF02L-KUNNR'   l_cust."'600266'.
+else.
+PERFORM bdc_field       using 'RF02L-KUNNR'   x_table-cust."'600266'.
+endif.
+PERFORM bdc_field       using 'RF02L-KKBER'   x_table-kkber."'npin'.
+PERFORM bdc_field       using 'RF02L-D0120'   'X'.
+PERFORM bdc_field       using 'RF02L-D0210'   'X'.
+
+ENDFORM.                    "initial_screen_update1
+
+*&---------------------------------------------------------------------*
+*&      Form  CENTRAL_DATA
+*&---------------------------------------------------------------------*
+*       Central Data Screen.
+*----------------------------------------------------------------------*
+FORM CENTRAL_DATA .
+  data: l_klimg(20),
+        l_klime(20).
+
+  perform bdc_dynpro      using 'SAPMF02C' '0120'.
+  perform bdc_field       using 'BDC_CURSOR'        'KNKA-WAERS'.
+  perform bdc_field       using 'BDC_OKCODE'        '/00'.
+  l_klimg = x_table-klimg.
+  perform bdc_field       using 'KNKA-KLIMG'        l_KLIMG.
+  l_klime = x_table-klime.
+  perform bdc_field       using 'KNKA-KLIME'        l_KLIME.
+  perform bdc_field       using 'KNKA-WAERS'        x_table-WAERS.
+
+
+ENDFORM.                    " CENTRAL_DATA
+
+*&---------------------------------------------------------------------*
+*&      Form  CENTRAL_DATA_update
+*&---------------------------------------------------------------------*
+*       Central Data Screen.
+*----------------------------------------------------------------------*
+FORM CENTRAL_DATA_update .
+  data: l_klimg(20),
+        l_klime(20).
+
+  PERFORM bdc_dynpro      USING 'SAPMF02C'         '0120'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'       'KNKA-KLIME'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'       '/00'.
+  l_klimg = x_table-klimg.
+  PERFORM bdc_field       USING 'KNKA-KLIMG'       l_KLIMG."'4,500,000.00'.
+  l_klime = x_table-klime.
+  PERFORM bdc_field       USING 'KNKA-KLIME'       l_KLIME."'4,500,000.00'.
+*  PERFORM bdc_field       USING 'KNKA-WAERS'       x_table-WAERS."'INR'.
+
+ENDFORM.                    " CENTRAL_DATA_update
+
+
+*&---------------------------------------------------------------------*
+*&      Form  CENTRAL_DATA_update1
+*&---------------------------------------------------------------------*
+*       Central Data Screen.
+*----------------------------------------------------------------------*
+FORM CENTRAL_DATA_update1.
+*  data: l_klimg(20),
+*        l_klime(20).
+
+*  PERFORM bdc_dynpro      USING 'SAPMF02C'         '0120'.
+*  PERFORM bdc_field       USING 'BDC_CURSOR'       'KNKA-KLIME'.
+*  PERFORM bdc_field       USING 'BDC_OKCODE'       '/00'.
+*  l_klimg = x_table-klimg.
+*  PERFORM bdc_field       USING 'KNKA-KLIMG'       l_KLIMG."'4,500,000.00'.
+*  l_klime = x_table-klime.
+*  PERFORM bdc_field       USING 'KNKA-KLIME'       l_KLIME."'4,500,000.00'.
+**  PERFORM bdc_field       USING 'KNKA-WAERS'       x_table-WAERS."'INR'.
+**************************************************
+PERFORM bdc_dynpro      using 'SAPMF02C'      '0120'.
+PERFORM bdc_field       using 'BDC_CURSOR'    'KNKA-KLIMG'.
+PERFORM bdc_field       using 'BDC_OKCODE'    '=S+'.
+*PERFORM bdc_field       using 'KNKA-KLIMG'    '600,000.00'.
+*PERFORM bdc_field       using 'KNKA-KLIME'    '600,000.00'.
+*PERFORM bdc_field       using 'KNKA-WAERS'    'INR'.
+
+ENDFORM.                    " CENTRAL_DATA_update1
+*&---------------------------------------------------------------------*
+*&      Form  STATUS_DATA
+*&---------------------------------------------------------------------*
+*       Status Screen
+*----------------------------------------------------------------------*
+
+FORM STATUS_DATA .
+  data: l_customer(10) type N,
+        l_cust(10),
+        l_klimk(20).
+
+  perform bdc_dynpro      using 'SAPMF02C' '0210'.
+  perform bdc_field       using 'BDC_CURSOR'         'KNKK-CTLPC'.
+  perform bdc_field       using 'BDC_OKCODE'         '=UPDA'.
+  l_klimk = x_table-KLIMK.
+  perform bdc_field       using 'KNKK-KLIMK'         l_klimk.
+  if x_table-kunnr co '0123456789 '.
+    l_customer = x_table-cust.
+    l_cust     = l_customer.
+    perform bdc_field       using 'KNKK-KNKLI'         l_cust.
+  else.
+    perform bdc_field       using 'KNKK-KNKLI'         x_table-cust.
+  endif.
+  perform bdc_field       using 'KNKK-CTLPC'         x_table-CTLPC.
+
+ENDFORM.                    " STATUS_DATA
+
+*&---------------------------------------------------------------------*
+*&      Form  STATUS_DATA_update
+*&---------------------------------------------------------------------*
+*       Status Screen
+*----------------------------------------------------------------------*
+
+FORM STATUS_DATA_update.
+  data: l_customer(10) type N,
+        l_cust(10),
+        l_klimk(20).
+
+PERFORM bdc_dynpro      using 'SAPMF02C'      '0210'.
+PERFORM bdc_field       using 'BDC_CURSOR'    'KNKK-KLIMK'.
+PERFORM bdc_field       using 'BDC_OKCODE'    '=UPDA'.
+l_klimk = x_table-KLIMK.
+PERFORM bdc_field       using 'KNKK-KLIMK'    l_klimk."'600,000.00'.
+*PERFORM bdc_field       using 'KNKK-KNKLI'    '600266'.
+*PERFORM bdc_field       using 'KNKK-CTLPC'    '001'.
+*
+*  PERFORM bdc_dynpro      USING 'SAPMF02C'         '0210'.
+*  PERFORM bdc_field       USING 'BDC_CURSOR'       'KNKK-KLIMK'.
+*  PERFORM bdc_field       USING 'BDC_OKCODE'       '/00'.
+*  l_klimk = x_table-KLIMK.
+*  PERFORM bdc_field       USING 'KNKK-KLIMK'       l_klimk."'4,500,000.00'.
+*  if x_table-kunnr co '0123456789 '.
+*    l_customer = x_table-cust.
+*    l_cust     = l_customer.
+*  PERFORM bdc_field       USING 'KNKK-KNKLI'       l_cust."'600265'.
+*  else.
+*  PERFORM bdc_field       USING 'KNKK-KNKLI'       x_table-cust."'600265'.
+*  endif.
+*  PERFORM bdc_field       USING 'KNKK-CTLPC'       x_table-CTLPC."'001'.
+*
+*  PERFORM bdc_dynpro      USING 'SAPLSPO1'         '0300'.
+*  PERFORM bdc_field       USING 'BDC_OKCODE'       '=YES'.
+ENDFORM.                    " STATUS_DATA_update
+
+*&---------------------------------------------------------------------*
+*&      Form  STATUS_DATA_update1
+*&---------------------------------------------------------------------*
+*       Status Screen
+*----------------------------------------------------------------------*
+
+FORM STATUS_DATA_update1.
+  data: l_customer(10) type N,
+        l_cust(10),
+        l_klimk(20).
+
+  data: l_klimg(20),
+        l_klime(20).
+
+PERFORM bdc_dynpro      using 'SAPMF02C'      '0210'.
+PERFORM bdc_field       using 'BDC_CURSOR'    'KNKK-KLIMK'.
+PERFORM bdc_field       using 'BDC_OKCODE'    '=S-'.
+l_klimk = x_table-KLIMK.
+PERFORM bdc_field       using 'KNKK-KLIMK'    l_klimk."'500,000.00'.
+
+PERFORM bdc_dynpro      using 'SAPMF02C'      '0120'.
+PERFORM bdc_field       using 'BDC_CURSOR'    'KNKA-KLIME'.
+PERFORM bdc_field       using 'BDC_OKCODE'    '=UPDA'.
+l_klimg = x_table-klimg.
+PERFORM bdc_field       using 'KNKA-KLIMG'    l_KLIMG."'500,000.00'.
+l_klime = x_table-klime.
+PERFORM bdc_field       using 'KNKA-KLIME'    l_KLIME."'500,000.00'.
+*PERFORM bdc_field       using 'KNKA-WAERS'    'INR'.
+
+ENDFORM.                    " STATUS_DATA_update1
+*&---------------------------------------------------------------------*
+*&      Form  BDC_COMMIT
+*&---------------------------------------------------------------------*
+
+FORM BDC_COMMIT .
+
+  perform bdc_transaction using 'FD32'.
+
+ENDFORM.                    " BDC_COMMIT
+
+*&---------------------------------------------------------------------*
+*&      Form  400_success_download
+*&---------------------------------------------------------------------*
+*       Downloading the success record file
+*----------------------------------------------------------------------*
+
+FORM 400_success_download .
+  DATA v_fill TYPE sy-tfill.
+
+  IF NOT it_success[] IS INITIAL.
+*-----Header.
+    x_table1-kunnr        = 'Customer'.
+    x_table1-kkber        = 'Credit Control Area'.
+    x_table1-KLIMG        = 'Total Amount'.
+    x_table1-KLIME        = 'Individual Limit'.
+    x_table1-WAERS        = 'Currency'.
+    x_table1-KLIMK        = 'Credit limit'.
+    x_table1-CTLPC        = 'Risk Category'.
+
+
+    INSERT x_table1 INTO it_success INDEX 1.
+
+    CLEAR x_table1.
+
+*-----Control Information.
+    INSERT x_table1 INTO it_success INDEX 1.
+    CONCATENATE 'No of Erros Records :'
+                v_failcount
+                INTO x_table1-kunnr .
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+    CONCATENATE 'No of Valid Records :'
+                v_succsount
+                INTO x_table1-kunnr .
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+    v_total = v_succsount + v_failcount.
+    CONCATENATE 'No of Records :'
+                 v_total
+                INTO x_table1-kunnr .
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+    x_table1-kunnr        = 'Control Information'.
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+
+*-----General Information.
+    x_table1-kunnr        = 'User-ID:'.
+    x_table1-kkber        = sy-uname.
+    x_table1-KLIME        = 'Customer Credit Management'.
+    x_table1-comments     = 'Page: 1'.
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+
+    x_table1-comments        = sy-datum.
+    CONCATENATE     'Date :'
+                    x_table1-comments+6(2)
+                    '.'
+                    x_table1-comments+4(2)
+                    '.'
+                    x_table1-comments+0(4)
+                    INTO x_table1-comments.
+    INSERT x_table1 INTO it_success INDEX 1.
+    CLEAR x_table1.
+
+    x_table1-KLIMK    = 'End of Report'.
+    DESCRIBE TABLE it_success.
+    v_fill = sy-tfill + 2.
+    INSERT x_table1 INTO it_success INDEX v_fill.
+    CLEAR x_table1.
+
+*-----Download to Excel.
+    CALL FUNCTION 'WS_DOWNLOAD'
+      EXPORTING
+        filename                = p_sfile
+        filetype                = 'DAT'
+      TABLES
+        data_tab                = it_success[]
+      EXCEPTIONS
+        file_open_error         = 1
+        file_write_error        = 2
+        invalid_filesize        = 3
+        invalid_type            = 4
+        no_batch                = 5
+        unknown_error           = 6
+        invalid_table_width     = 7
+        gui_refuse_filetransfer = 8
+        customer_error          = 9
+        OTHERS                  = 10.
+    IF sy-subrc <> 0.
+      MESSAGE 'Error during Success-File download' TYPE 'E'.
+    ENDIF.
+
+    WRITE : 'Sucessful records are downloaded to the path', p_sfile.
+
+  ENDIF.
+ENDFORM.                    " 400_success_download
+
+
+*&---------------------------------------------------------------------*
+*&      Form  MESS_DESCRIPTION
+*&---------------------------------------------------------------------*
+*       To get message description from the BDC
+*----------------------------------------------------------------------*
+
+FORM mess_description .
+
+  CALL FUNCTION 'FORMAT_MESSAGE'
+    EXPORTING
+      id   = messtab-msgid
+      lang = sy-langu
+      no   = messtab-msgnr
+    IMPORTING
+      msg  = x_table1-comments.
+
+ENDFORM.                    " MESS_DESCRIPTION
+*&---------------------------------------------------------------------*
+*&      Form  500_download_errors
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+
+FORM 500_download_errors .
+
+*-----Header.
+  x_table1-kunnr        = 'Customer'.
+  x_table1-kkber        = 'Credit Control Area'.
+  x_table1-KLIMG        = 'Total Amount'.
+  x_table1-KLIME        = 'Individual Limit'.
+  x_table1-WAERS        = 'Currency'.
+  x_table1-KLIMK        = 'Credit limit'.
+  x_table1-CTLPC        = 'Risk Category'.
+  INSERT x_table1 INTO it_error INDEX 1.
+
+  CLEAR x_table1.
+
+*-----Download to Excel.
+  CALL FUNCTION 'WS_DOWNLOAD'
+    EXPORTING
+      filename                = p_efile
+      filetype                = 'DAT'
+    TABLES
+      data_tab                = it_error[]
+    EXCEPTIONS
+      file_open_error         = 1
+      file_write_error        = 2
+      invalid_filesize        = 3
+      invalid_type            = 4
+      no_batch                = 5
+      unknown_error           = 6
+      invalid_table_width     = 7
+      gui_refuse_filetransfer = 8
+      customer_error          = 9
+      OTHERS                  = 10.
+  IF sy-subrc <> 0.
+    MESSAGE 'Error during Error-File download' TYPE 'E'.
+  ENDIF.
+
+  WRITE : 'Error records are downloaded to the path', p_efile.
+ENDFORM.                    " 500_download_errors

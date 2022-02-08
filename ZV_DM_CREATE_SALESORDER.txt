@@ -1,0 +1,1466 @@
+************************************************************************
+* This program migrates data from the legacy system and into SAP system*
+* and creates Sales-Orders by via SAP transaction VA01 through BDC     *
+* Recording.                                                           *
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date       | Changed by         | Description             *
+*----------+------------+--------------------+-------------------------*
+*          | 02.04.2009 | Gnanasambanthan.V  | Initial program         *
+************************************************************************
+*          | 21.04.2009 | Gnanasambanthan.V  | Changes for date        *
+*                                            | and automatic Batch     *
+************************************************************************
+report ZV_DM_CREATE_SALESORDER
+       no standard page heading line-size 255.
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+*----------------------------------------------------------------------*
+* TABLES
+*----------------------------------------------------------------------*
+TABLES : MARA,                                               "General Material Data
+         MARC,                                               "Plant Data for Material
+         MCHA,                                               "Batches
+         KNA1,                                               "General Data in Customer Master
+         knb1,
+         VBAK,
+         TVAU,
+         J_1IMOCUST.
+* include programs for common processes in interface programs
+INCLUDE zbdcincl.
+DATA:  zzret_code LIKE sy-subrc.
+*----------------------------------------------------------------------*
+* Data Declaration
+*----------------------------------------------------------------------*
+* input file format (fixed width)
+DATA : BEGIN OF t_sales OCCURS 0,
+        REF_NO(20),                                          "Reference Number
+        VBELN(20),                                           "BAAN Invoice No
+        AUART(20),                                            "Sales Document Type
+*        VKORG(20)                                            "Sales Organization
+*        VTWEG(20)                                            "Distribution Channel
+*        SPART(20)                                            "Division
+        ALTKN(10),                                           " Prev. Customer No.
+        BSTKD(20),                                           "Customer purchase order number
+        BISMT(20),                                           "Prev. Material Number
+        KWMENG(20),                                          "Cumulative Order Quantity in Sales Units
+*************************************
+*        KWMENG           LIKE VBAP-KWMENG,                  "Cumulative Order Quantity in Sales Units
+        INV_PRC(20),                                         "Invoice Price
+        INV_DISC(20),                                        "Discount Rate on Invoice
+        DISC_PER(8),                                         "Percentage of Discount on Invoice
+*        KBETR            LIKE KOMV-KBETR,                    "Rate (condition amount or percentage)
+*************************************
+        KBETR(15),                                           "Rate (condition amount or percentage)
+        WERKS(20),                                           "Plant
+*        CHARG(20),                                           "Batch Number
+        VDATU(10),                                           "Requested delivery date
+        VSTEL(20),                                           "Shipping Point/Receiving Point
+        DELQN(20),                                           "Delivery quantity
+        PIKQN(20),                                           "Picking Quantity
+        INV_SER(20),                                         "Invoice Series
+        FKDAT(20),                                           "BAAN Invoice Date
+        SO_NO(20),                                           "BAAN Sales Ordr No
+        PGI_NO(20),                                          "BAAN PGI No
+        KUNNR(10),                                           "Customer Number 1
+        MATNR(18),                                           "Material Number
+        BSTDK(10),                                           "Customer purchase order date
+        DOC_DATE(10),                                        "Sales Order Document Date
+        PRC_DATE(10),                                        "Pricing Date
+        INCO_TERM1(3),                                       "Inco Terms 1
+        INCO_TERM2(28),                                      "Inco Terms 2
+        order_reason(3),                                     " Order Reason
+        POSNR(20),                                           "Sales Document Item
+*        text_line       LIKE bapisdtext-text_line,           "Text Line
+*        index TYPE i,
+*        text_line(132),
+       END OF t_sales.
+
+* Error File download
+DATA : BEGIN OF t_err OCCURS 0,
+        REF_NO(20),                                          "Reference Number
+        VBELN(20),                                           "BAAN Invoice No
+        AUART(20),                                            "Sales Document Type
+*        VKORG(20)                                            "Sales Organization
+*        VTWEG(20)                                            "Distribution Channel
+*        SPART(20)                                            "Division
+        ALTKN(10),                                           " Prev. Customer No.
+        BSTKD(20),                                           "Customer purchase order number
+        BISMT(20),                                           "Prev. Material Number
+        KWMENG(20),                                          "Cumulative Order Quantity in Sales Units
+*************************************
+        INV_PRC(20),                                         "Invoice Price
+        INV_DISC(20),                                        "Discount Rate on Invoice
+        DISC_PER(8),                                         "Percentage of Discount on Invoice
+*************************************
+        KBETR(15),                                           "Rate (condition amount or percentage)
+        WERKS(20),                                           "Plant
+*        CHARG(20),                                           "Batch Number
+        VDATU(10),                                           "Requested delivery date
+        VSTEL(20),                                           "Shipping Point/Receiving Point
+        DELQN(20),                                           "Delivery quantity
+        PIKQN(20),                                           "Picking Quantity
+        INV_SER(20),                                         "Invoice Series
+        FKDAT(20),                                           "BAAN Invoice Date
+        SO_NO(20),                                           "BAAN Sales Ordr No
+        PGI_NO(20),                                          "BAAN PGI No
+        POSNR(20),                                            "Sales Document Item
+        KUNNR(10),                                           "Customer Number 1
+        MATNR(18),                                           "Material Number
+        BSTDK(10),                                           "Customer purchase order date
+        DOC_DATE(10),                                        "Sales Order Document Date
+        PRC_DATE(10),                                        "Pricing Date
+        INCO_TERM1(3),                                       "Inco Terms 1
+        INCO_TERM2(28),                                      "Inco Terms 2
+        order_reason(3),                                     " Order Reason
+        so_vbeln(20),
+        err_desc              TYPE string,
+        sort,
+*        text_line     LIKE bapisdtext-text_line,             "Text Line
+*        index TYPE i,
+*        text_line(132),
+       END OF t_err.
+* Convert XLS into SAP format Function Module
+DATA: it_raw  TYPE truxs_t_text_data.
+* Work-Area declarations for Success/ Error data download.
+DATA : w_initial LIKE t_err.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_initial.
+DATA : END OF w_init1.
+* Internal table declarations for Success/ Error data download.
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+*Calculating the total number of records
+DATA : BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+       END OF tot.
+* Internal Data declarations
+DATA : g_init TYPE i.
+DATA : g_mess TYPE string.
+DATA : v_flag.
+DATA : v_flag1.
+DATA : l_sales like t_sales.
+DATA : cnt TYPE I.
+DATA : cnt1 TYPE I.
+DATA : g_result TYPE string.
+
+DATA:  w_upllen            TYPE i VALUE 2000,
+       err_msg(100)        TYPE c,
+       SAP_SO_NO           LIKE kna1-kunnr,
+       batch_name(30)      TYPE c,
+       v_open.
+
+* Constants
+CONSTANTS: c_trans(4)    VALUE 'VA01',           " transaction code used
+           delimiter(1)  VALUE ','.
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+
+DATA : g_dat_prc_dt(10),
+       g_dat_doc_dt(10),
+       g_dat_bstdk(10),
+       g_dat_vdatu(10).
+
+data :g_tabix LIKE sy-tabix,
+      t_fsales LIKE t_sales OCCURS 0 WITH HEADER LINE,
+      v_flag3,
+      w_sales like t_sales.
+
+data : BEGIN OF t_kbetr OCCURS 0,
+        kbetr like t_sales-kbetr,
+      END OF t_kbetr.
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename DEFAULT 'c:\temp\parbcust.xls',
+            p_hed       AS CHECKBOX          DEFAULT 'X',     " With header line? X or Y for yes
+            p_test      AS CHECKBOX,                          " test run? X or Y for yes
+            p_sess(12)  TYPE c,
+            p_mode.
+PARAMETERS: p_rest      LIKE rlgrap-filename DEFAULT 'c:\temp\Result.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+*----------------------------------------------------------------------*
+* At Selection-Screen for upload and download file
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_upl.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_rest.
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+*Validating upload File Path
+  IF p_upl IS INITIAL.
+    MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Validating Download File Path
+  IF p_rest IS INITIAL.
+    MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Validating BDC Session
+  IF p_sess IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Validating BDC Session Mode.
+  IF p_mode IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*To upload input File
+  PERFORM 100_upload_file.
+  IF v_flag EQ 'X'.
+    CLEAR : v_flag.
+    WRITE: /01   text-001 ,
+         27        ':',
+         30      sy-repid,
+*          92      text-001,
+         92      sy-pagno,
+        /01      text-003,
+         10      'by',
+         27      ':',
+         30      sy-uname,
+         82      sy-datum DD/MM/YY,
+         92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    ULINE.
+    WRITE : 'Error in Uploading the File'.
+    ULINE.
+    EXIT.
+  ELSE.
+    CLEAR : v_flag.
+  ENDIF.
+  IF t_sales[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+  ENDIF.
+  SORT t_sales BY REF_NO.
+*Validation of Fields before uploading
+  PERFORM field_validation.
+  IF p_test IS INITIAL.
+    IF NOT t_sales[] IS INITIAL.
+      PERFORM Create_Sales_Order.
+    endif.
+  ELSE.
+    PERFORM test_only_result.
+  ENDIF.
+*----------------------------------------------------------------------*
+*  End Of Selection
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+  IF NOT t_err[] IS INITIAL.
+*To Download error file.
+    PERFORM success_error_download.
+  ENDIF.
+  WRITE: /01        text-001 ,
+            29        ':',
+            30      sy-repid,
+*           92      text-001,
+            92      sy-pagno,
+           /01      text-002,
+            10      'by',
+            29        ':',
+            30      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+  ULINE.
+  SKIP 1.
+  IF v_flag1 EQ 'X'.
+    CLEAR v_flag1.
+*    WRITE : /01 'Error in Downloading the File'.
+    WRITE: /01     text-005,
+            36     p_rest.
+*    ULINE.
+    EXIT.
+  ELSE.
+    IF  p_test is initial.
+      WRITE: /01     text-005,
+              36     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+    ELSE.
+      WRITE: /01     text-005,
+              36     p_rest.
+    ENDIF.
+  ENDIF.
+*  WRITE: /01     text-003,
+*          25     p_rest.
+**         /01     text-006,
+**          20     batch_name.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',                36 tot-read.
+  IF p_test IS INITIAL.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL SALES ORDERS CREATED',            36 tot-ok.
+    WRITE: / 'TOTAL SALES ORDER DATA IN ERROR',       36 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',                 36 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',                   36 tot-err.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       To upload input File
+*----------------------------------------------------------------------*
+FORM 100_UPLOAD_FILE .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      i_line_header        = p_hed
+      i_tab_raw_data       = it_raw
+      i_filename           = p_upl
+    TABLES
+      i_tab_converted_data = t_sales.
+  IF SY-SUBRC NE 0.
+    V_FLAG = 'X'.
+  ENDIF.
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM FIELD_VALIDATION.
+  DATA : l_cnt2 TYPE I.
+*  LOOP at t_sales.
+*    PERFORM DATE_FORMAT_INPUT.
+*  ENDLOOP.
+
+  loop at t_sales.
+    DATA :  v_old_kunnr(10) TYPE n.
+    IF t_sales-ALTKN IS NOT INITIAL.
+      IF t_sales-ALTKN CO '0123456789 '.
+        v_old_kunnr = t_sales-ALTKN.
+        t_sales-ALTKN = v_old_kunnr.
+        MODIFY t_sales.
+      ENDIF.
+    ENDIF.
+    if t_sales-altkn is not initial.
+      SELECT SINGLE kunnr FROM knb1
+                     INTO t_sales-kunnr
+                    WHERE altkn = t_sales-altkn.
+      IF sy-subrc = 0.
+        MODIFY t_sales.
+      ENDIF.
+    ENDIF.
+* -------> Material No Conversion Routine
+    TRANSLATE t_sales-MATNR TO UPPER CASE.
+    IF t_sales-MATNR CO '0123456789 '.
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = t_sales-MATNR
+        IMPORTING
+          OUTPUT = t_sales-MATNR.
+    ENDIF.
+    MODIFY T_SALES.
+*      ENDIF.
+    IF t_sales-BISMT is NOT INITIAL.
+      SELECT SINGLE MATNR  FROM MARA
+                           INTO t_sales-MATNR
+                          WHERE BISMT EQ t_sales-BISMT.
+      IF sy-subrc = 0.
+        MODIFY t_sales.
+      ENDIF.
+    ENDIF.
+  endloop.
+*-------> ERROR file Upload on Validation
+  LOOP AT t_sales.
+    CLEAR : t_err-err_desc.
+    ON CHANGE OF t_sales-REF_NO.
+      ADD 1 TO tot-read.
+    ENDON.
+*    DATA :  v_old_kunnr(10) TYPE n.
+* -------> Customer/ Sold-to-party Validation.
+*    TRANSLATE t_sales-ALTKN TO UPPER CASE.
+*    IF t_sales-ALTKN IS NOT INITIAL.
+*      IF t_sales-ALTKN CO '0123456789 '.
+*        v_old_kunnr = t_sales-ALTKN.
+*        t_sales-ALTKN = v_old_kunnr.
+*        MODIFY t_sales.
+*      ENDIF.
+    SELECT SINGLE *  FROM knb1
+                     WHERE altkn = t_sales-altkn.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        CONCATENATE 'Customer No. '
+                   t_sales-altkn
+                   'does not exist'
+              INTO t_err-err_desc.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    else.
+      SELECT single INCO1 Inco2 FROM KNVV
+                         INTO (t_sales-INCO_TERM1, t_sales-INCO_TERM2)
+                         WHERE kunnr = t_sales-kunnr.
+      IF t_sales-INCO_TERM1 IS INITIAL
+       or t_sales-INCO_TERM2 IS INITIAL .
+*              if t_sales-INCO_TERM1 IS INITIAL
+*             or t_sales-INCO_TERM2 IS INITIAL.
+        ADD 1 TO tot-err.
+        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+*          l_cnt2 = l_cnt2 + 10.
+          MOVE-CORRESPONDING t_sales TO t_err.
+          CONCATENATE 'Incoterm1 and Incoterm2 '
+                      'is not maintained for customer'
+                      ' '
+                      t_sales-kunnr
+                      INTO t_err-err_desc.
+
+          t_err-sort  = 'B'.
+*          t_err-posnr = l_cnt2.
+          APPEND t_err.
+          DELETE t_sales.
+        ENDLOOP.
+**           endif.
+      ENDIF.
+
+*        APPEND t_succ.
+    ENDIF.
+*    ENDIF.
+* -------> PO Validation
+    IF t_sales-BSTKD IS INITIAL.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Purchase Order Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> Material Validation from old material no
+    IF t_sales-BISMT IS NOT INITIAL.
+      SELECT SINGLE *  FROM MARA
+
+                          WHERE BISMT EQ t_sales-BISMT.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+          MOVE-CORRESPONDING t_sales TO t_err.
+          CONCATENATE 'Material'
+                      t_sales-bismt
+                      'does not exist'
+                 INTO t_err-err_desc.
+          t_err-sort = 'B'.
+          APPEND t_err.
+          DELETE t_sales.
+        ENDLOOP.
+*      ELSE.
+* -------> Material No Conversion Routine
+*        TRANSLATE t_sales-MATNR TO UPPER CASE.
+*        IF t_sales-MATNR CO '0123456789 '.
+*          CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*            EXPORTING
+*              input  = t_sales-MATNR
+*            IMPORTING
+*              OUTPUT = t_sales-MATNR.
+*        ENDIF.
+*        MODIFY T_SALES.
+      ENDIF.
+    ELSE.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Material Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> Material Plant Validation
+    IF T_SALES-MATNR     IS NOT INITIAL
+       AND T_SALES-WERKS IS NOT INITIAL.
+      SELECT SINGLE * FROM MARC
+                      INTO CORRESPONDING FIELDS OF MARC
+                     WHERE MATNR EQ t_sales-MATNR
+                       AND WERKS EQ t_sales-WERKS.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+          MOVE-CORRESPONDING t_sales TO t_err.
+          CONCATENATE 'Material '
+                      t_sales-MATNR
+                      ' is not maintained for plant '
+                      t_sales-WERKS
+                    INTO t_err-err_desc.
+          t_err-sort = 'B'.
+          APPEND t_err.
+          DELETE t_sales.
+        ENDLOOP.
+      ENDIF.
+    ENDIF.
+* -------> Quantity Validation.
+    IF t_sales-BSTKD IS INITIAL.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Quantity Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> Plant Validation
+    IF t_sales-werks IS NOT INITIAL.
+      SELECT SINGLE * FROM  MARC
+                      WHERE WERKS = t_sales-WERKS.
+      IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+          MOVE-CORRESPONDING t_sales TO t_err.
+          CONCATENATE 'Plant '
+                       t_sales-WERKS
+                      ' is not maintained '
+                      INTO t_err-err_desc.
+          t_err-sort = 'B'.
+          APPEND t_err.
+          DELETE t_sales.
+        ENDLOOP.
+      ENDIF.
+    ELSE.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Plant Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> Batch Validation
+*    IF t_sales-charg IS INITIAL.
+*      IF     t_sales-werks IS NOT INITIAL
+*        AND t_sales-matnr IS NOT INITIAL.
+*        SELECT SINGLE charg FROM MCHA
+*                            INTO t_sales-charg
+*                           WHERE matnr = t_sales-MATNR
+*                             AND werks = t_sales-werks.
+*        IF sy-subrc NE 0.
+*          ADD 1 TO tot-err.
+*          LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+*            MOVE-CORRESPONDING t_sales TO t_err.
+*            CONCATENATE 'Batch '
+*                        ' is not maintained '
+*                        'for Material '
+*                        t_sales-matnr
+*                        'and Plant '
+*                        t_sales-werks
+*                        INTO t_err-err_desc.
+*            t_err-sort = 'B'.
+*            APPEND t_err.
+*            DELETE t_sales.
+*          ENDLOOP.
+*        ENDIF.
+*      ENDIF.
+*    ELSE.
+*      SELECT SINGLE * FROM MCHA
+*                     WHERE charg = t_sales-charg.
+*      IF sy-subrc NE 0.
+*        ADD 1 TO tot-err.
+*        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+*          MOVE-CORRESPONDING t_sales TO t_err.
+*          CONCATENATE 'Batch '
+*                       t_sales-charg
+*                      ' is not maintained '
+*                      INTO t_err-err_desc.
+*          t_err-sort = 'B'.
+*          APPEND t_err.
+*          DELETE t_sales.
+*        ENDLOOP.
+*      ENDIF.
+*    ENDIF.
+* -------> Reference No Validation
+    IF t_sales-REF_NO is initial.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Invoice Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> PO Date Validation
+    IF t_sales-BSTDK is initial.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter PO Date Details'.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> SO Doc Date Validation
+    IF t_sales-Doc_date is initial.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter SO Doc Date '.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+* -------> Pricing Date Validation
+    IF t_sales-Prc_date is initial.
+      ADD 1 TO tot-err.
+      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+        MOVE-CORRESPONDING t_sales TO t_err.
+        t_err-err_desc = 'Please enter Pricing Date '.
+        t_err-sort = 'B'.
+        APPEND t_err.
+        DELETE t_sales.
+      ENDLOOP.
+    ENDIF.
+** -------> INCO Term 1 Validation
+*    IF t_sales-INCO_TERM1 is initial.
+*      ADD 1 TO tot-err.
+*      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+*        MOVE-CORRESPONDING t_sales TO t_err.
+*        t_err-err_desc = 'Please enter INCO Terms1 '.
+*        t_err-sort = 'B'.
+*        APPEND t_err.
+*        DELETE t_sales.
+*      ENDLOOP.
+*    ENDIF.
+** -------> INCO Term 2 Validation
+*    IF t_sales-INCO_TERM2 is initial.
+*      ADD 1 TO tot-err.
+*      LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+*        MOVE-CORRESPONDING t_sales TO t_err.
+*        t_err-err_desc = 'Please enter INCO Terms 2 '.
+*        t_err-sort = 'B'.
+*        APPEND t_err.
+*        DELETE t_sales.
+*      ENDLOOP.
+*    ENDIF.
+    IF  t_sales-auart = 'ZRE'
+     OR t_sales-auart = 'ZSO'.
+*     OR t_sales-auart = 'ZDR'   .
+      IF t_sales-order_reason IS INITIAL.
+*          SELECT SINGLE AUGRU  FROM TVAU
+*                          WHERE AUGRU = t_sales-order_reason.
+*            IF sy-subrc NE 0.
+        ADD 1 TO tot-err.
+        LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+          MOVE-CORRESPONDING t_sales TO t_err.
+          t_err-err_desc = 'Please enter Order Reason '.
+          t_err-sort = 'B'.
+          APPEND t_err.
+          DELETE t_sales.
+        ENDLOOP.
+*            ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_SALES_ORDER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM CREATE_SALES_ORDER .
+*  DATA : v_KWMENG LIKE VBAP-KWMENG.
+  DATA : v_kbetr TYPE p DECIMALS 2.
+  DATA : v_err.
+  CLEAR:  err_msg,
+          batch_name,
+          t_err.
+*  SORT t_sales BY vbeln.
+  LOOP AT T_SALES.
+*--------> To calculate Line Item Price(ZDNP Value)
+*      v_KWMENG = t_sales-KWMENG.
+    v_kbetr = ( t_sales-INV_PRC + t_sales-INV_DISC ) / t_sales-KWMENG.
+    t_sales-kbetr = v_kbetr.
+    MODIFY t_sales.
+  ENDLOOP.
+
+  loop at t_sales.
+    cnt = cnt + 1.
+    g_tabix = sy-tabix.
+    PERFORM do_va01_by_calltran
+                       TABLES t_sales
+                       USING  p_mode        "Show errors only
+                              err_msg
+                              batch_name
+                              SAP_SO_NO.
+    CALL TRANSACTION 'VA01' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+    IF sy-subrc NE 0.
+      zzret_code = sy-subrc.
+      IF v_open NE 'X'.
+        PERFORM bdc_open_group USING p_sess.
+        v_open = 'X'.
+      ENDIF.
+      PERFORM bdc_insert USING 'VA01'.
+    ELSE.
+      zzret_code = 0.
+    ENDIF.
+    IF zzret_code = 0.
+      SAP_SO_NO = sy-msgv2.
+    ELSE.
+      CLEAR SAP_SO_NO.
+    ENDIF.
+*------> Success and Error file segrecation after BDC
+    READ TABLE messtab WITH  KEY msgtyp = 'E'.
+    IF sy-subrc =  0.
+*------> Error File
+      ADD 1 TO tot-err.
+*------> Get the Error details
+      PERFORM format_message.
+      IF v_flag3 = 'X'.
+        LOOP at t_fsales.
+*          l_cnt = l_cnt + 10.
+*          t_err-POSNR = l_cnt.
+          t_err-sort = 'B'.
+          MOVE-CORRESPONDING t_fsales TO t_err .
+          APPEND  t_err.
+        endloop.
+        DELETE t_sales WHERE REF_NO = t_sales-REF_NO.
+      else.
+*        l_cnt = '10'.
+*        t_err-POSNR = l_cnt.
+        t_err-sort = 'B'.
+        MOVE-CORRESPONDING t_sales TO t_err .
+        APPEND t_err.
+      ENDIF.
+    ELSE.
+      IF SY-MSGV2 CO '0123456789 ' AND STRLEN( SY-MSGV2 ) GE 8.
+        ADD 1 TO tot-ok.
+        CLEAR : t_err-err_desc.
+*------> Success Message
+        IF v_flag3 = 'X'.
+          LOOP at t_fsales.
+*            l_cnt = l_cnt + 10.
+*            t_err-POSNR = l_cnt.
+            t_err-sort = 'A'.
+            t_err-so_vbeln = SAP_SO_NO.
+            CONCATENATE 'Sales Document '
+                         SAP_SO_NO
+                        ' has been successfully created'
+                        INTO g_result.
+            t_err-err_desc   = g_result.
+            MOVE-CORRESPONDING t_fsales TO t_err .
+            APPEND  t_err.
+          endloop.
+          DELETE t_sales WHERE REF_NO = t_sales-REF_NO.
+        else.
+*          l_cnt = '10'.
+*          t_err-POSNR = l_cnt.
+          t_err-sort = 'A'.
+          t_err-so_vbeln = SAP_SO_NO.
+          CONCATENATE 'Sales Document '
+                       SAP_SO_NO
+                      ' has been successfully created'
+                      INTO g_result.
+          t_err-err_desc   = g_result.
+          MOVE-CORRESPONDING t_sales TO t_err .
+          APPEND t_err.
+        ENDIF.
+      ELSE.
+        ADD 1 TO tot-err.
+*------> Warning / Information Message
+        PERFORM format_message.
+        IF v_flag3 = 'X'.
+          LOOP at t_fsales.
+*            l_cnt = l_cnt + 10.
+*            t_err-POSNR = l_cnt.
+            t_err-sort = 'B'.
+            MOVE-CORRESPONDING t_fsales TO t_err .
+            APPEND  t_err.
+          endloop.
+          DELETE t_sales WHERE REF_NO = t_sales-REF_NO.
+        else.
+*          l_cnt = '10'.
+*          t_err-POSNR = l_cnt.
+          t_err-sort = 'B'.
+          MOVE-CORRESPONDING t_sales TO t_err .
+          APPEND t_err.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+*********************************************************
+*    LOOP at messtab where msgtyp = 'S'
+*                    OR    MSGTYP = 'I'
+*                    OR    MSGTYP = 'W'.
+*      IF SY-MSGV2 CO '0123456789 ' AND STRLEN( SY-MSGV2 ) = 8.
+*        IF v_flag3 = 'X'.
+*          ADD 1 TO tot-ok.
+*          LOOP at t_fsales.
+*            t_err-sort = 'A'.
+*            t_err-so_vbeln = SAP_SO_NO.
+*            MOVE-CORRESPONDING t_fsales TO t_err .
+*            APPEND  t_err.
+*          endloop.
+*          REFRESH t_fsales.
+*          DELETE t_sales WHERE vbeln = t_sales-vbeln.
+*        else.
+*          ADD 1 TO tot-ok.
+*          t_err-sort = 'A'.
+*          t_err-so_vbeln = SAP_SO_NO.
+*          MOVE-CORRESPONDING t_sales TO t_err .
+*          APPEND t_err.
+*        ENDIF.
+*      else.
+*        PERFORM format_message.
+*        IF v_flag3 = 'X'.
+*          LOOP at t_fsales.
+*            t_err-sort = 'B'.
+**          t_err-so_vbeln = SAP_SO_NO.
+*            MOVE-CORRESPONDING t_fsales TO t_err .
+*            APPEND  t_err.
+*          endloop.
+*          REFRESH t_fsales.
+*          DELETE t_sales WHERE vbeln = t_sales-vbeln.
+*        else.
+*          t_err-sort = 'B'.
+**        t_err-so_vbeln = SAP_SO_NO.
+*          MOVE-CORRESPONDING t_sales TO t_err .
+*          DELETE t_sales WHERE vbeln = t_sales-vbeln.
+*          APPEND t_err.
+*        ENDIF.
+*      ENDIF.
+*    ENDLOOP.
+*
+*    LOOP AT MESSTAB WHERE MSGTYP = 'E'.
+**Error File
+*      ADD 1 TO tot-err.
+***Get the Error details
+*      PERFORM format_message.
+*      IF v_flag3 = 'X'.
+*        LOOP at t_fsales.
+*          t_err-sort = 'B'.
+*          t_err-so_vbeln = SAP_SO_NO.
+*          MOVE-CORRESPONDING t_fsales TO t_err .
+*          APPEND  t_err.
+*        endloop.
+*        REFRESH t_fsales.
+*        DELETE t_sales WHERE vbeln = t_sales-vbeln.
+*      else.
+*        t_err-sort = 'B'.
+**        t_err-so_vbeln = SAP_SO_NO.
+*        MOVE-CORRESPONDING t_sales TO t_err .
+*        APPEND t_err.
+*      ENDIF.
+*    ENDLOOP.
+*********************************************************
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+    REFRESH bdcdata.
+    clear : v_open,
+            messtab,
+            SAP_SO_NO.
+    CLEAR : t_err-so_vbeln,
+            t_err-err_desc.
+
+    refresh : messtab.
+*    ENDAT.
+  endloop.
+ENDFORM.                    " CREATE_SALES_ORDER
+*&---------------------------------------------------------------------*
+*&      Form  DO_VA01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*      Fill the appropriate screens for the transaction and            *
+*      Call transaction VA01(Sales Order)                              *
+*----------------------------------------------------------------------*
+FORM DO_VA01_BY_CALLTRAN  TABLES   P_T_INDATA STRUCTURE t_sales
+                          USING    P_P_MODE
+                                   P_ERR_MSG
+                                   P_BATCH_NAME
+                                   P_SAP_CUSNO.
+  PERFORM process_screen_100.
+  PERFORM process_screen_110.
+ENDFORM.                    " DO_VA01_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*       Initial screen of va01 - where Sales Order Type                *
+*       Sales Org, Dist.Chnl, Division etc are chosen                  *
+*----------------------------------------------------------------------*
+FORM PROCESS_SCREEN_100 .
+  perform bdc_dynpro      using 'SAPMV45A'             '0101'.
+  perform bdc_field       using 'BDC_CURSOR'           'VBAK-AUART'.
+  perform bdc_field       using 'BDC_OKCODE'           '/00'.
+  perform bdc_field       using 'VBAK-AUART'           t_sales-AUART.
+ENDFORM.                    " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*       Screen consisting of all details on Sales Order                *
+*       Creation                                                       *
+*----------------------------------------------------------------------*
+FORM PROCESS_SCREEN_110 .
+*------> Local Data Declarations
+  DATA : l_cnt TYPE I.
+  DATA : l_cnt1(2).
+  DATA : v_PMNTTRMS(4).
+  DATA : cnt2 TYPE i,
+         CNT3(2) TYPE n,
+         CNT4(2) TYPE c,
+         V_NAME(15)  TYPE C VALUE 'RV45A-MABNR' ,
+         V_NAME2(15) TYPE C VALUE 'RV45A-ETDAT' ,
+         V_NAME3(15) TYPE C VALUE 'RV45A-KWMENG' ,
+         V_NAME6(15) TYPE C VALUE 'VBAP-ZMENG' ,
+         V_NAME1(25) TYPE C,
+         V_NAME4(25) TYPE C,
+         V_NAME5(25) TYPE C,
+         V_NAME7(25) TYPE C,
+         V_NAME8(25) TYPE C VALUE 'VBAP-WERKS',
+*         V_NAME9(25) TYPE C VALUE 'VBAP-CHARG',
+         V_NAME10(25) TYPE C.
+*         V_NAME11(25) TYPE C.
+  DATA : v_so_no(35) TYPE C.
+  DATA : v_INV_no(35) TYPE C.
+  DATA : v_INV_dat(35) TYPE C.
+  DATA : v_CUST_no(35) TYPE C.
+  DATA : v_PGI_no(35) TYPE C.
+  DATA : v_excise.
+*------> Clear local variables
+  CLEAR : v_flag3,
+          t_fsales,
+          t_kbetr,
+          t_fsales[],
+          t_kbetr[],
+          w_sales,
+          v_so_no,
+          v_INV_no,
+          v_INV_dat,
+          v_CUST_no,
+          v_PGI_no,
+          cnt,
+          l_cnt,
+          bdcdata.
+*-------->  BDC part to fill header details of SO
+  perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+  perform bdc_field       using 'BDC_OKCODE'           '/00'.
+  perform bdc_field       using 'VBKD-BSTKD'           t_sales-BSTKD.
+  perform bdc_field       using 'VBKD-BSTDK'           t_sales-BSTDK.
+  perform bdc_field       using 'KUAGV-KUNNR'          t_sales-kunnr.
+  perform bdc_field       using 'RV45A-KPRGBZ'         'D'.
+  perform bdc_field       using 'VBKD-PRSDT'           t_sales-PRC_DATE.
+  perform bdc_field       using 'RV45A-KETDAT'         t_sales-VDATU.
+  perform bdc_field       using 'BDC_CURSOR'           'RV45A-KWMENG(01)'.
+
+  IF t_sales-auart = 'ZRE'.
+    perform bdc_field       using 'BDC_CURSOR'         'VBAK-AUGRU'.
+    perform bdc_field       using 'VBAK-AUGRU'         t_sales-order_reason.
+    perform bdc_field       using 'BDC_CURSOR'         'VBAK-FAKSK'.
+    perform bdc_field       using 'VBAK-FAKSK'         ''.
+  ELSEIF t_sales-auart = 'ZSO'.
+    perform bdc_field       using 'BDC_CURSOR'         'VBAK-AUGRU'.
+    perform bdc_field       using 'VBAK-AUGRU'         t_sales-order_reason.
+  ENDIF.
+
+  SELECT SINGLE zterm  from knb1
+                       into v_pmnttrms
+                      where kunnr = t_sales-kunnr.
+  perform bdc_field       using 'VBKD-INCO1'           t_sales-INCO_TERM1.
+  perform bdc_field       using 'VBKD-INCO2'           t_sales-INCO_TERM2.
+  perform bdc_field       using 'VBKD-ZTERM'           v_pmnttrms.
+  perform bdc_field       using 'BDC_CURSOR'           'VBAP-POSNR(01)'.
+
+  CONCATENATE   'BAAN Ref.Inv No- '
+                  t_sales-REF_NO
+                 into v_INV_no.
+  CONCATENATE    'BAAN Inv Date- '
+                   t_sales-fkdat
+                 INTO v_INV_dat.
+  CONCATENATE    'BAAN Cust No-'
+                  t_sales-altkn
+                 INTO v_CUST_no.
+  CONCATENATE    'BAAN Sales Order No-'
+                 t_sales-so_no
+                 INTO v_so_no.
+  CONCATENATE    'BAAN PGI No-'
+                 t_sales-pgi_no
+                 INTO v_PGI_no.
+*--------> BDC part to add text containing old BAAN Details in Sales Order
+  perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+*  perform bdc_field       using 'BDC_OKCODE'           '/00'.
+  perform bdc_field       using 'BDC_OKCODE'           '=HEAD'.
+
+  IF    t_sales-auart = 'ZOR1'
+     OR t_sales-auart = 'ZSO'.
+    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+    perform bdc_field       using 'BDC_CURSOR'           'VBAK-AUDAT'.
+    perform bdc_field       using 'VBAK-AUDAT'           t_sales-VDATU.
+    perform bdc_field       using 'BDC_OKCODE'           '=T\08'.
+  ELSE.
+    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+    perform bdc_field       using 'BDC_CURSOR'           'VBAK-AUDAT'.
+    perform bdc_field       using 'VBAK-AUDAT'           t_sales-VDATU.
+    perform bdc_field       using 'BDC_OKCODE'           '=T\09'.
+  ENDIF.
+
+  perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+  perform bdc_field       using 'BDC_OKCODE'           '=TP_DETAIL'.
+  perform bdc_field       using 'LV70T-SPRAS'          'EN'.
+  perform bdc_dynpro      using 'SAPLSTXX'             '1100'.
+  perform bdc_field       using 'BDC_CURSOR'           'RSTXT-TXLINE(02)'.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'RSTXT-TXPARGRAPH(02)' '*'.
+  perform bdc_field       using 'RSTXT-TXLINE(02)'     v_INV_no.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'RSTXT-TXPARGRAPH(03)' '*'.
+  perform bdc_field       using 'RSTXT-TXLINE(03)'     v_INV_dat.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'RSTXT-TXPARGRAPH(04)' '*'.
+  perform bdc_field       using 'RSTXT-TXLINE(04)'     v_CUST_no.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'RSTXT-TXPARGRAPH(05)' '*'.
+  perform bdc_field       using 'RSTXT-TXLINE(05)'     v_so_no.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'RSTXT-TXPARGRAPH(06)' '*'.
+  perform bdc_field       using 'RSTXT-TXLINE(06)'     v_PGI_no.
+  perform bdc_field       using 'BDC_OKCODE'           '=EDNL'.
+  perform bdc_field       using 'BDC_OKCODE'            '=TXVB'.
+  perform bdc_dynpro      using 'SAPLSTXX' '1100'.
+  perform bdc_field       using 'BDC_CURSOR'           'RSTXT-TXLINE(03)'.
+  perform bdc_field       using 'BDC_OKCODE'           '=TXBA'.
+
+  IF t_sales-auart = 'ZOR1'.
+    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+    perform bdc_field       using 'BDC_OKCODE'           '=T\05'.
+*    perform bdc_field       using 'BDC_CURSOR'           'VBAK-AUDAT'.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '=V69A_KOAN'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KSCHL(01)'.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '/00'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(02)'.
+    perform bdc_field       using 'KOMV-KSCHL(02)'       'ZHDM'.
+    perform bdc_field       using 'KOMV-KBETR(02)'       T_SALES-DISC_PER.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '/EBACK'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KSCHL(03)'.
+
+  ELSEIF t_sales-auart = 'ZRE'.
+*    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+*    perform bdc_field       using 'BDC_OKCODE'           '=T\03'.
+*    perform bdc_field       using 'VBKD-ZTERM'           v_pmnttrms.
+**    perform bdc_field       using 'BDC_CURSOR'           'VBKD-ZTERM'.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+    perform bdc_field       using 'BDC_OKCODE'           '=T\06'.
+*    perform bdc_field       using 'BDC_CURSOR'           'VBAK-AUDAT'.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '=V69A_KOAN'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KSCHL(01)'.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '/00'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(02)'.
+    perform bdc_field       using 'KOMV-KSCHL(02)'       'ZHDM'.
+    perform bdc_field       using 'KOMV-KBETR(02)'       T_SALES-DISC_PER.
+
+    perform bdc_dynpro      using 'SAPMV45A'             '5002'.
+    perform bdc_field       using 'BDC_OKCODE'           '/EBACK'.
+    perform bdc_field       using 'BDC_CURSOR'           'KOMV-KSCHL(03)'.
+
+  ELSEIF t_sales-auart = 'ZSO'.
+    perform bdc_dynpro      using 'SAPMV45A'             '4002'.
+    perform bdc_field       using 'BDC_OKCODE'           '/EBACK'.
+  ENDIF.
+*--------> BDC part to fill Line-item-wise details of SO
+  g_tabix = g_tabix + 1.
+  READ TABLE t_sales INTO w_sales INDEX g_tabix.
+  if w_sales-REF_NO = t_sales-REF_NO.
+    LOOP at t_sales WHERE REF_NO = t_sales-REF_NO.
+      APPEND t_sales to t_fsales.
+    endloop.
+    v_flag3 = 'X'.
+  endif.
+
+  if v_flag3 = 'X'.
+    LOOP at t_fsales.
+      l_cnt = l_cnt + 10.
+      t_fsales-posnr = l_cnt.
+      MODIFY t_fsales.
+      CNT2  = CNT2  + 1.
+      if cnt2 ge 5.
+        CNT3 = 5.
+        CNT4 = CNT3.
+      else.
+        CNT3 = CNT2.
+        CNT4 = CNT3.
+      endif.
+      move t_fsales-kbetr to t_kbetr-kbetr.
+      APPEND t_kbetr.
+*-----> Screen field: Line Item - Material
+      CONCATENATE V_NAME
+                  '('
+                  CNT4
+                  ')'
+                 INTO V_NAME1.
+      CONDENSE V_NAME1 NO-GAPS.
+*-----> Screen field: Line Item - Date
+      CONCATENATE V_NAME2
+                 '('
+                 CNT4
+                 ')'
+                INTO V_NAME4.
+      CONDENSE V_NAME4 NO-GAPS.
+*-----> Screen field: Line Item - Quantity
+      CONCATENATE V_NAME3
+                 '('
+                 CNT4
+                 ')'
+                INTO V_NAME5.
+      CONDENSE V_NAME5 NO-GAPS.
+*-----> Screen field: Line Item - Plant
+      CONCATENATE V_NAME8
+                 '('
+                 CNT4
+                 ')'
+                INTO V_NAME10.
+      CONDENSE V_NAME10 NO-GAPS.
+*-----> Screen field: Line Item - Batch
+*      CONCATENATE V_NAME9
+*                 '('
+*                 CNT4
+*                 ')'
+*                INTO V_NAME11.
+*      CONDENSE V_NAME11 NO-GAPS.
+
+      perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+      perform bdc_field       using 'BDC_OKCODE'           '/00'.
+      perform bdc_field       using V_NAME1                t_Fsales-MATNR.
+      perform bdc_field       using V_NAME4                t_Fsales-VDATU.
+
+      perform bdc_field       using V_NAME5                t_Fsales-KWMENG.
+      perform bdc_field       using V_NAME10               t_Fsales-WERKS.
+*      perform bdc_field       using V_NAME11               t_Fsales-CHARG.
+    ENDLOOP.
+    perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+    perform bdc_field       using 'BDC_OKCODE'           '=MKAL'.
+    perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+    perform bdc_field       using 'BDC_OKCODE'           '=PKO1'.
+*    SELECT SINGLE kunnr FROM J_1IMOCUST
+*                        INTO J_1IMOCUST-KUNNR
+*                        WHERE kunnr = t_fsales-kunnr.
+*    IF sy-subrc = 0.
+*      v_excise = 'X'.
+*    ENDIF.
+    IF t_sales-auart NE 'ZSO'.
+      LOOP at t_kbetr.
+        perform bdc_dynpro      using 'SAPMV45A'             '5003'.
+*      IF v_excise = 'X'.
+        perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(03)'.
+        perform bdc_field       using 'KOMV-KBETR(03)'       t_kbetr-KBETR.
+*      ELSE.
+*        perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(01)'.
+*        perform bdc_field       using 'KOMV-KBETR(01)'       t_kbetr-KBETR.
+*      ENDIF.
+        perform bdc_field       using 'BDC_OKCODE'           '/00'.
+        perform bdc_field       using 'BDC_OKCODE'           '=POS+'.
+      endloop.
+    ENDIF.
+*    CLEAR : v_excise.
+  else.
+    perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+    perform bdc_field       using 'BDC_OKCODE'           '/00'.
+    perform bdc_field       using 'RV45A-MABNR(01)'      t_sales-MATNR.
+    perform bdc_field       using 'RV45A-ETDAT(01)'      t_sales-VDATU.
+    perform bdc_field       using 'VBAP-WERKS(01)'       t_sales-WERKS.
+*    perform bdc_field       using 'VBAP-CHARG(01)'       t_sales-CHARG.
+    perform bdc_field       using 'RV45A-KWMENG(01)'     t_sales-KWMENG.
+
+*    SELECT SINGLE kunnr FROM J_1IMOCUST
+*                        INTO J_1IMOCUST-KUNNR
+*                        WHERE kunnr = t_sales-kunnr.
+*    IF sy-subrc = 0.
+*      v_excise = 'X'.
+*    ENDIF.
+    perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+    perform bdc_field       using 'BDC_OKCODE'           '=MKAL'.
+    perform bdc_dynpro      using 'SAPMV45A'             '4001'.
+    perform bdc_field       using 'BDC_OKCODE'           '=PKO1'.
+    perform bdc_dynpro      using 'SAPMV45A'             '5003'.
+*    IF v_excise = 'X'.
+    IF t_sales-auart NE 'ZSO'.
+      perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(03)'.
+      perform bdc_field       using 'KOMV-KBETR(03)'       t_sales-KBETR.
+*    ELSE.
+*      perform bdc_field       using 'BDC_CURSOR'           'KOMV-KBETR(01)'.
+*      perform bdc_field       using 'KOMV-KBETR(01)'       t_kbetr-KBETR.
+*    ENDIF.
+      perform bdc_field       using 'BDC_OKCODE'           '/00'.
+      perform bdc_field       using 'BDC_OKCODE'           '=POS+'.
+*    CLEAR : v_excise.
+    ENDIF.
+      l_cnt1 = '10'.
+      t_sales-posnr = l_cnt1.
+      MODIFY t_sales.
+  endif.
+  perform bdc_dynpro      using 'SAPMV45A'             '5003'.
+  perform bdc_field       using 'BDC_OKCODE'           '=SICH'.
+ENDFORM.                    " PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*       FM to fetch the standard message details
+*----------------------------------------------------------------------*
+FORM FORMAT_MESSAGE .
+  LOOP AT messtab WHERE msgtyp = 'E'
+                  OR    msgtyp = 'W'
+                  OR    msgtyp = 'I'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+    CONCATENATE t_err-err_desc
+                g_mess
+                INTO t_err-err_desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  TEST_ONLY_RESULT
+*&---------------------------------------------------------------------*
+*       To move contents into output file, for Test only option
+*----------------------------------------------------------------------*
+FORM TEST_ONLY_RESULT .
+  if not t_sales[] is initial.
+    LOOP AT t_sales.
+      MOVE-CORRESPONDING t_sales to t_err.
+      t_err-sort = 'A'.
+      CLEAR t_err-err_desc.
+      APPEND t_err.
+    ENDLOOP.
+  endif.
+ENDFORM.                    " TEST_ONLY_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       To perform Success and Error file download in a ordered format
+*----------------------------------------------------------------------*
+FORM SUCCESS_ERROR_DOWNLOAD .
+  SORT t_err BY sort REF_NO vbeln AUART POSNR.
+  READ TABLE t_err INDEX 1.
+  IF t_err-sort = 'A'.
+    CLEAR : t_err.
+    t_err-REF_NO = 'Succ'.
+    INSERT t_err INTO t_err INDEX 1.
+  ENDIF.
+
+  READ TABLE t_err WITH KEY sort = 'B'.
+  IF sy-subrc = 0.
+    g_init = sy-tabix.
+    CLEAR : t_err.
+    t_err-REF_NO = 'Erro'.
+    INSERT t_err INTO t_err INDEX g_init.
+    g_init = g_init - 1.
+**      CLEAR t_err.
+*    IF g_init IS NOT INITIAL.
+*      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+*    ENDIF.
+  ENDIF.
+*----->Download error and Success files
+  PERFORM download_result.
+ENDFORM.                    " SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       FM to download Success and error file from SAP
+*----------------------------------------------------------------------*
+FORM DOWNLOAD_RESULT .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*  PERFORM date_format.
+  PERFORM download_header_line.
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    IF t_err-REF_NO = 'Erro'.
+      t_fdown-REF_NO = 'Error '.
+    ELSEIF t_err-REF_NO = 'Succ'.
+      t_fdown-REF_NO = 'Success'.
+    ENDIF.
+    APPEND t_fdown.
+  ENDLOOP.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc = 0.
+    clear t_fdown[].
+  ELSE.
+    V_FLAG1 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*       Header line details on output excel file
+*----------------------------------------------------------------------*
+FORM DOWNLOAD_HEADER_LINE .
+  t_fdown-REF_NO      = 'BAAN Reference No'.
+  t_fdown-VBELN       = 'BAAN Invoice No'.
+  t_fdown-AUART       = 'Sales Order Type'.
+  t_fdown-ALTKN       = 'BAAN Customer No.'.
+  t_fdown-BSTKD       = 'PO Number'.
+  t_fdown-BISMT       = 'BAAN Material No.'.
+  t_fdown-KWMENG      = 'Order Quantity'.
+  t_fdown-INV_PRC     = 'Invoice Price'.
+  t_fdown-INV_DISC    = 'Discount Rate on Invoice'.
+  t_fdown-DISC_PER    = 'Discount%'.
+  t_fdown-KBETR       = 'Item Price(ZDNP)'.
+  t_fdown-werks       = 'Plant'.
+*  t_fdown-charg       = 'Batch Number'.
+  t_fdown-VDATU       = 'Del. Date'.
+  t_fdown-VSTEL       = 'Shipping Point'.
+  t_fdown-DELQN       = 'Delivery quantity'.
+  t_fdown-PIKQN       = 'Picking Quantity'.
+  t_fdown-inv_ser     = 'Invoice Series'.
+  t_fdown-fkdat       = 'Invoice Date'.
+  t_fdown-so_no       = 'BAAN SO No.'.
+  t_fdown-pgi_no      = 'BAAN PGI No.'.
+  t_fdown-KUNNR       = 'Customer No.'.
+  t_fdown-POSNR       = 'Line Item No.'.
+  t_fdown-matnr       = 'Material No.'.
+  t_fdown-bstdk       = 'PO Date'.
+  t_fdown-Doc_date    = 'SO.Date'.
+  t_fdown-prc_date    = 'Pri.Date'.
+  t_fdown-inco_term1  = 'Inco Term 1'.
+  t_fdown-inco_term2  = 'Inco Term 2'.
+  t_fdown-order_reason = 'Order Reason'.               " Order Reason
+  t_fdown-err_desc    = 'Description'.
+  t_fdown-so_vbeln    = 'SAP SO No.'.
+  t_fdown-sort        = 'Status'.
+  INSERT  t_fdown INDEX 1.
+ENDFORM.                    " DOWNLOAD_HEADER_LINE
+**&---------------------------------------------------------------------*
+**&      Form  DATE_FORMAT
+**&---------------------------------------------------------------------*
+**       Format date in output file
+**----------------------------------------------------------------------*
+*FORM DATE_FORMAT .
+*  if not t_err[] is initial.
+*    loop at t_err.
+*      CONCATENATE t_err-VDATU+0(2)
+*                  '.'
+*                  t_err-VDATU+2(2)
+*                  '.'
+*                  t_err-VDATU+4(4)
+*                  INTO t_err-vdatu.
+*      CONCATENATE t_err-BSTDK+0(2)
+*                  '.'
+*                  t_err-BSTDK+2(2)
+*                  '.'
+*                  t_err-BSTDK+4(4)
+*                  INTO t_err-BSTDK.
+*      CONCATENATE t_err-FKDAT+0(2)
+*                  '.'
+*                  t_err-FKDAT+2(2)
+*                  '.'
+*                  t_err-FKDAT+4(4)
+*                  INTO t_err-FKDAT.
+*      CONCATENATE t_err-DOC_DATE+0(2)
+*                  '.'
+*                  t_err-DOC_DATE+2(2)
+*                  '.'
+*                  t_err-DOC_DATE+4(4)
+*                  INTO t_err-DOC_DATE.
+*      CONCATENATE t_err-PRC_DATE+0(2)
+*                  '.'
+*                  t_err-PRC_DATE+2(2)
+*                  '.'
+*                  t_err-PRC_DATE+4(4)
+*                  INTO t_err-PRC_DATE.
+*      modify t_err.
+*    endloop.
+*  endif.
+*ENDFORM.                    " DATE_FORMAT
+**&---------------------------------------------------------------------*
+**&      Form  DATE_FORMAT_INPUT
+**&---------------------------------------------------------------------*
+**       text
+**----------------------------------------------------------------------*
+**  -->  p1        text
+**  <--  p2        text
+**----------------------------------------------------------------------*
+*FORM DATE_FORMAT_INPUT .
+**DATA : L_date1(10).
+**DATA : L_date2(10).
+**DATA : L_date3(10).
+**SPLIT t_sales-BSTDK AT '/' INTO l_date1 l_date2.
+*REPLACE all OCCURRENCES OF REGEX '/' IN TABLE t_sales WITH '.'
+*  RESPECTING CASE.
+*
+*ENDFORM.                    " DATE_FORMAT_INPUT

@@ -1,0 +1,662 @@
+
+REPORT  ZM_MATPLANT_CHAPTERID NO STANDARD PAGE HEADING
+                            LINE-SIZE  100
+                            LINE-COUNT 65.
+************************************************************************
+* This program uploads a flat file from the PC and uploades the         *
+* material plant and chapter id combination by calling transaction J1ID.*
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 01.01.2009 | Suresh G      | Initial program              *
+************************************************************************
+
+
+TABLES: mara,         "Chapter ID Master
+        t001w,        "Plants/Branches
+        j_1ichpter,   "Chapter ID Master
+        j_1imtchid.   "Combination of Material Number and Chapter ID
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+* include program for common routines for interface programs
+DATA: zzret_code LIKE sy-subrc,
+      v_open.
+DATA: it_raw TYPE truxs_t_text_data.
+* constants - these values will stay the same
+CONSTANTS: c_tcode(4)      TYPE c   VALUE 'J1ID'.
+
+DATA: w_upllen             TYPE i   VALUE '2000',
+      err_msg(100)         TYPE c,
+*      sap_cusno            LIKE kna1-kunnr,
+      batch_name(30)       TYPE c.
+
+* table for transaction status
+DATA: BEGIN OF status_tab OCCURS 0,
+        status(10),
+        btc_sess(12)       TYPE c,
+*        cus_no             LIKE kna1-kunnr,
+        message(100),
+      END OF status_tab.
+
+DATA: BEGIN OF inrec OCCURS 0,
+        filler(3000),
+      END OF inrec.
+* format of the input file
+DATA: BEGIN OF t_indata OCCURS 0,
+       matnr      TYPE j_1imtchid-matnr,
+       werks      TYPE j_1imtchid-werks,
+       j_1ichid   TYPE j_1imtchid-j_1ichid,
+       j_1icapind TYPE j_1imtchid-j_1icapind,
+       j_1igrxref TYPE j_1imtchid-j_1igrxref,
+      END OF t_indata.
+*Format for Download file
+DATA: BEGIN OF t_outdat OCCURS 0,
+       matnr(20),
+       werks(5),
+       j_1ichid(15),
+       j_1icapind(15),
+       j_1igrxref(15),
+      END OF t_outdat.
+
+DATA: l_matnr(30),
+     l_werks(30),
+     l_chapter(30),
+     l_mattype(30),
+     l_grref(30).
+*Calculating the total number of records
+DATA: BEGIN OF tot,
+        read               TYPE i,
+        ok                 TYPE i,
+        err                TYPE i,
+      END OF tot.
+DATA: v_msgno LIKE sy-msgno.
+
+DATA :BEGIN OF  t_err  OCCURS 0.
+INCLUDE  STRUCTURE t_outdat.
+DATA : desc TYPE string.
+DATA : sort TYPE c.
+DATA : END OF t_err.
+*Message tab for BDC
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+DATA : t_ddown LIKE t_indata OCCURS 0 WITH HEADER LINE.
+DATA : w_initial LIKE t_outdat.
+DATA : BEGIN OF w_init1.
+        INCLUDE STRUCTURE w_initial.
+DATA : desc TYPE string.
+DATA : END OF w_init1.
+*Final internal table for Download
+DATA : t_fdown LIKE w_init1 OCCURS 0 WITH HEADER LINE.
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_flag1 TYPE c.
+INCLUDE zbdcincl.
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename DEFAULT 'c:\temp\parbcust.xls',
+            p_head       AS CHECKBOX DEFAULT 'X',     " With header line? X or Y for yes
+            p_test      AS CHECKBOX,     " test run? X or Y for yes
+            p_sess(12)  TYPE c ,
+            p_mode     .
+PARAMETERS: p_rest      LIKE rlgrap-filename
+                         DEFAULT 'c:\temp\Success.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+*----------------------------------------------------------------------*
+* At Selection-screen                                                  *
+*----------------------------------------------------------------------*
+*Get File name for Upload
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_upl
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*Get File name for download in download radio Button
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+  CALL FUNCTION 'WS_FILENAME_GET'
+    IMPORTING
+      filename         = p_rest
+    EXCEPTIONS
+      inv_winsys       = 1
+      no_batch         = 2
+      selection_cancel = 3
+      selection_error  = 4
+      OTHERS           = 5.
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+IF p_upl IS INITIAL.
+      MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating Download File Path
+    IF p_rest IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Checking the Session Is Blank Or Not
+  IF p_sess IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Checking The Mode is initial or not
+  IF p_mode IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+*Perform To Upload The File
+  PERFORM 100_upload_file.
+  IF v_flag EQ 'X'.
+    CLEAR : v_flag.
+    WRITE: /01      text-001 ,
+         27        ':',
+         30      sy-repid,
+*          92      text-001,
+         92      sy-pagno,
+        /01      text-003,
+         10      'by',
+         27      ':',
+         30      sy-uname,
+         82      sy-datum DD/MM/YY,
+         92      sy-uzeit.
+
+  ULINE.
+    SKIP 1.
+    ULINE.
+    WRITE : 'Error in Uploading the File'.
+    ULINE.
+    EXIT.
+  ELSE.
+    CLEAR : v_flag.
+  ENDIF.
+*Checking Whether the Internal table is initial or not
+  IF t_indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+    EXIT.
+  ENDIF.
+*Adding the intial line of the xls.
+  PERFORM initial_line.
+  PERFORM validate_fields.
+  IF p_test IS INITIAL.
+    PERFORM create_matplant_chapterid.
+  ENDIF.
+**If Any errors in Bdc Transfer to Session
+*    IF v_open = 'X'.
+*      PERFORM bdc_close_group USING p_sess.
+*    ENDIF.
+*  ENDIF.
+
+*----------------------------------------------------------------------*
+* End of Selection                                                  *
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+*Sorting the Success and error files in a internal table
+  IF  t_err[] IS NOT INITIAL.
+    SORT t_err BY sort.
+    READ TABLE t_err INDEX 1.
+    IF t_err-sort = 'A'.
+      CLEAR : t_err.
+      t_err-matnr = 'Success'.
+      INSERT t_err INTO t_err INDEX 1.
+    ENDIF.
+    READ TABLE t_err WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_err.
+      t_err-matnr = 'Errors'.
+      INSERT t_err INTO t_err INDEX g_init.
+      INSERT INITIAL LINE INTO  t_err INDEX g_init.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+  ENDIF.
+  WRITE:     /01      text-001 ,
+              27        ':',
+              30     sy-repid,
+*          92      text-001,
+              92      sy-pagno,
+             /01      text-003,
+              10      'By',
+              27      ':',
+              30      sy-uname,
+              82      sy-datum DD/MM/YY,
+              92      sy-uzeit.
+
+  ULINE.
+  SKIP 1.
+  IF v_flag1 EQ 'X'.
+    CLEAR v_flag1.
+    WRITE : /01 'Error in Downloading the File'.
+    ULINE.
+*    EXIT.
+else.
+  if  p_test is initial.
+  WRITE: /01     text-005,
+          25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+  endif.
+    ENDIF.
+  ULINE.
+  SKIP 2.
+  WRITE: / 'TOTAL INPUT RECORDS READ',   40 tot-read.
+  IF p_test IS INITIAL.
+    WRITE: / 'TOTAL MATERIAL AND CHAPTER ID CREATED',    40 tot-ok.
+    WRITE: / 'TOTAL MATERIAL AND CHAPTER ID IN ERROR',   40 tot-err.
+  ELSE.
+    tot-ok = tot-read - tot-err.
+    WRITE: / 'TOTAL RECORDS SUCCESS',    40 tot-ok.
+    WRITE: / 'TOTAL RECORDS ERROR',   40 tot-err.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM 100_upload_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+     EXPORTING
+*   I_FIELD_SEPERATOR          = ','
+      i_line_header              = p_head
+       i_tab_raw_data             = it_raw
+       i_filename                 = p_upl
+     TABLES
+       i_tab_converted_data       = t_indata
+    EXCEPTIONS
+      conversion_failed          = 1
+      OTHERS                     = 2
+             .
+
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag = 'X'.
+  ENDIF.
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  INITIAL_LINE
+*&---------------------------------------------------------------------*
+*         Adding the intial line of the xls
+*----------------------------------------------------------------------*
+
+FORM initial_line .
+  w_initial-matnr      = 'Material Number'.
+  w_initial-werks      = 'Plant'.
+  w_initial-j_1ichid   = 'Chapter Id'.
+  w_initial-j_1icapind = 'Mat.Type'.
+  w_initial-j_1igrxref = 'GR Ref'.
+ENDFORM.                    " INITIAL_LINE
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*       Validating The Fields Before Uploading
+*----------------------------------------------------------------------*
+
+FORM validate_fields .
+  DATA: l_matnr(18) TYPE n.
+  LOOP AT t_indata.
+    ADD 1 TO tot-read.
+    IF NOT t_indata-matnr IS INITIAL.
+      IF t_indata-matnr CO '0123456789 '.
+        l_matnr        = t_indata-matnr.
+        t_indata-matnr = l_matnr.
+      ENDIF.
+    ENDIF.
+* Validating The Material
+    TRANSLATE t_indata-matnr TO UPPER CASE.
+    SELECT SINGLE matnr FROM mara INTO mara
+                        WHERE matnr = t_indata-matnr.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+
+*Conversion routine for Material
+  CALL FUNCTION 'CONVERSION_EXIT_MATN1_OUTPUT'
+    EXPORTING
+      input  = t_indata-matnr
+    IMPORTING
+      output = t_indata-matnr.
+
+  t_err-matnr = t_indata-matnr.
+        CONCATENATE  'Material'
+                   t_indata-matnr
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+* Validating the Plant
+    TRANSLATE t_indata-werks TO UPPER CASE.
+    SELECT SINGLE werks FROM t001w INTO t001w
+                        WHERE werks = t_indata-werks.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Plant'
+                   t_indata-werks
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+*Validating The Chapter Id
+    if t_indata-j_1ichid is not initial.
+    SELECT SINGLE j_1ichid FROM j_1ichpter INTO j_1ichpter
+                        WHERE j_1ichid = t_indata-j_1ichid.
+    IF sy-subrc NE 0.
+      ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Chapter Id'
+                   t_indata-j_1ichid
+                   'Does not Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+    ENDIF.
+    endif.
+*Validating The Material and Plant exists in the Sap System
+    select single * from j_1imtchid where matnr = t_indata-matnr
+                                    and  werks  = t_indata-werks.
+     if sy-subrc = 0.
+       ADD 1 TO tot-err.
+      MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Material'
+                   t_indata-matnr
+                   'plant'
+                   t_indata-werks
+                   'Combination Already Exist in the SAP System'
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+      endif.
+*  Validating The Chapter ID
+      if t_indata-j_1ichid is initial.
+      ADD 1 TO tot-err.
+     MOVE-CORRESPONDING t_indata TO t_err.
+      t_err-sort = 'B'.
+      CONCATENATE  'Chapter ID Could Not Be Blank'
+                  t_indata-j_1ichid
+                   INTO t_err-desc
+                   SEPARATED BY space.
+      APPEND t_err.
+      DELETE t_indata.
+      CONTINUE.
+      endif.
+  ENDLOOP.
+ENDFORM.                    " VALIDATE_FIELDS
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_MATPLANT_CHAPTERID
+*&---------------------------------------------------------------------*
+*  Calls the transaction to create the material/plant and chapter id
+* and checks to see
+*  if it is successful or not.
+*----------------------------------------------------------------------*
+
+FORM create_matplant_chapterid .
+  CLEAR: err_msg,
+         batch_name,
+         t_err.
+  LOOP AT t_indata.
+    PERFORM do_j1id_by_calltran
+                       TABLES t_indata
+                       USING  p_mode        "Show errors only
+                              err_msg
+                              batch_name.
+*  perform bdc_transaction using 'J1ID'.
+    CALL TRANSACTION 'J1ID' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+    IF sy-subrc NE 0.
+      zzret_code = sy-subrc.
+      IF v_open NE 'X'.
+        PERFORM bdc_open_group USING p_sess.
+        v_open = 'X'.
+      ENDIF.
+      PERFORM bdc_insert USING 'J1ID'.
+    ELSE.
+      zzret_code = 0.
+    ENDIF.
+*  IF zzret_code = 0.
+**    sap_venno = sy-msgv1.
+*  ELSE.
+**    CLEAR sap_venno.
+*  ENDIF.
+*Start of Mod002
+    READ TABLE messtab WITH  KEY msgtyp = 'E'.
+    IF sy-subrc =  0.
+      ADD 1 TO tot-err.
+*Error File
+      MOVE-CORRESPONDING t_indata TO t_err .
+      t_err-sort = 'B'.
+*    t_outdata-sort = 'B'.
+*Get the Error details
+      PERFORM format_message.
+      APPEND t_err.
+    ELSE.
+      ADD 1 TO tot-ok.
+*Success Message
+      MOVE-CORRESPONDING t_indata TO t_err.
+*    CONCATENATE MESSTAB-msgv1
+*                'Created Successfully'
+*                INTO t_err-desc.
+*    t_outdata-sort = 'A'.
+      t_err-sort = 'A'.
+      APPEND t_err.
+    ENDIF.
+*If Any errors in Bdc Transfer to Session
+    IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+*End of Mod002
+    REFRESH bdcdata.
+    CLEAR : l_matnr,
+            l_werks,
+            l_chapter,
+            l_mattype,
+            l_grref,
+            v_open,
+            g_mess,
+            messtab,
+            t_err
+            .
+    REFRESH : messtab.
+  ENDLOOP.
+*  PERFORM get_status.
+ENDFORM.                    " CREATE_MATPLANT_CHAPTERID
+*&---------------------------------------------------------------------*
+*&      Form  DO_J1ID_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_T_INDATA  text
+*      -->P_P_MODE  text
+*      -->P_ERR_MSG  text
+*      -->P_BATCH_NAME  text
+*----------------------------------------------------------------------*
+FORM do_j1id_by_calltran  TABLES   p_t_indata STRUCTURE t_indata
+                                     "Insert correct name for <...>
+                          USING    p_p_mode
+                                   p_err_msg
+                                   p_batch_name.
+  PERFORM process_screen_100.
+  PERFORM process_screen_110.
+
+
+ENDFORM.                    " DO_J1ID_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*          This is the initial screen of j1id - where material plant       *
+*       radio button is selected
+*----------------------------------------------------------------------*
+
+FORM process_screen_100 .
+  PERFORM bdc_dynpro      USING 'SAPMJ1ID'                            '0200'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'                          'RB1'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'                          '=EX'.
+  PERFORM bdc_field       USING 'RB11'                                ''.
+  PERFORM bdc_field       USING 'RB1'                                 'X'.
+ENDFORM.                    " PROCESS_SCREEN_100
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*         This is the screen consisting of all details on                *
+*      material plant and chapter id details
+*----------------------------------------------------------------------*
+
+FORM process_screen_110 .
+  PERFORM bdc_dynpro      USING 'SAPLJ1I5'                           '0020'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'                         'VIM_POSITION_INFO'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'
+                                '=NEWL'.
+  PERFORM bdc_dynpro      USING 'SAPLJ1I5'                          '0020'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'                        'J_1IMTCHID-J_1IGRXREF(02)'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'                        '=SAVE'.
+  PERFORM:    bdc_field   USING 'J_1IMTCHID-MATNR(01)'             t_indata-matnr,
+              bdc_field   USING 'J_1IMTCHID-WERKS(01)'             t_indata-werks,
+              bdc_field   USING 'J_1IMTCHID-J_1ICHID(01)'          t_indata-j_1ichid ,
+              bdc_field   USING 'J_1IMTCHID-J_1ICAPIND(01)'        t_indata-j_1icapind,
+              bdc_field   USING 'J_1IMTCHID-J_1IGRXREF(01)'        t_indata-j_1igrxref.
+
+  PERFORM bdc_dynpro      USING 'SAPLJ1I5'                         '0020'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'                       'J_1IMTCHID-MATNR(03)'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'                       '=ENDE'.
+
+  PERFORM bdc_dynpro      USING 'SAPMJ1ID'                        '0200'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'                      '/EEXIT'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'                      'EXCISE'.
+ENDFORM.                    " PROCESS_SCREEN_110
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*        Get the Error details
+*----------------------------------------------------------------------*
+
+FORM format_message .
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+*    CONCATENATE t_outdata-desc
+*                g_mess
+*                INTO t_outdata-desc SEPARATED BY space.
+    CONCATENATE
+                t_err-desc
+                g_mess
+                INTO t_err-desc SEPARATED BY space.
+*    t_err-desc = g_mess.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  CONCATENATE_LINE_NO
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+
+FORM concatenate_line_no .
+*  CONCATENATE 'J_1IMTCHID-MATNR('      t_indata-s_no ')' INTO l_matnr.
+*  CONCATENATE 'J_1IMTCHID-WERKS('      t_indata-s_no ')' INTO l_werks.
+*  CONCATENATE 'J_1IMTCHID-J_1ICHID('   t_indata-s_no ')' INTO l_chapter.
+*  CONCATENATE 'J_1IMTCHID-J_1ICAPIND(' t_indata-s_no ')' INTO l_mattype.
+*  CONCATENATE 'J_1IMTCHID-J_1IGRXREF(' t_indata-s_no ')' INTO l_grref.
+
+
+ENDFORM.                    " CONCATENATE_LINE_NO
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*        Download error and Success files
+*----------------------------------------------------------------------*
+
+FORM download_result .
+  DATA : f_string TYPE string.
+  f_string = p_rest.
+*The Error table contains sort field which is not neccessary while downloading
+* so transfer the records to another internal table for download
+  LOOP AT t_err.
+    MOVE-CORRESPONDING t_err TO t_fdown.
+    APPEND t_fdown.
+  ENDLOOP.
+  MOVE-CORRESPONDING w_initial TO w_init1.
+
+
+  INSERT w_init1 INTO t_fdown INDEX 1.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_fdown[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc <> 0.
+* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    v_flag1 = 'X'.
+  ENDIF.
+ENDFORM.                    " DOWNLOAD_RESULT

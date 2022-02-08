@@ -1,0 +1,666 @@
+report ZL_DELIVERY_ORDER_CREATE
+       no standard page heading line-size 255.
+************************************************************************
+* This program uploads a flat file from the PC and uploades the         *
+* Delivery Document calling transaction VL01N.*
+************************************************************************
+*                         CHANGE HISTORY                               *
+*----------------------------------------------------------------------*
+* Version# | Date     | Changed by | Description                       *
+*----------+----------+------------+-----------------------------------*
+*          | 05.03.2009 | Sathish kumar   | Initial program            *
+************************************************************************
+TABLES: likp,         "SD Document: Delivery Header Data
+        TVSWZ,        "Shipping Points per Plant
+        VBAK,         "Sales Document: Header Data
+        MCHA.         "Batches
+*----------------------------------------------------------------------*
+* Type-pools
+*----------------------------------------------------------------------*
+TYPE-POOLS : truxs.
+*include bdcrecx1.
+* include programs for common processes in interface programs
+DATA  zzret_code LIKE sy-subrc.
+INCLUDE zbdcincl.
+*----------------------------------------------------------------------*
+* Selection Screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN : BEGIN OF BLOCK 001 WITH FRAME TITLE text-001.
+PARAMETERS: p_upl       LIKE rlgrap-filename DEFAULT 'c:\temp\venexcise.xls',
+            p_hed       AS CHECKBOX DEFAULT 'X',     " With header line? X or Y for yes
+            p_test      AS CHECKBOX,                 " test run? X or Y for yes
+            p_sess(12)  TYPE c,
+            p_mode.
+PARAMETERS: p_rest      LIKE rlgrap-filename  DEFAULT 'c:\temp\Result.xls'.
+SELECTION-SCREEN : END OF BLOCK 001.
+
+SELECTION-SCREEN : BEGIN OF BLOCK 002 WITH FRAME TITLE text-002.
+PARAMETERS: p_date(10) OBLIGATORY.
+SELECTION-SCREEN : END OF BLOCK 002.
+*----------------------------------------------------------------------*
+* Data Declaration
+*----------------------------------------------------------------------*
+* input file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_indata OCCURS 0,
+       vstel LIKE likp-vstel,        "Shipping Point/Receiving Point
+       vbeln LIKE vbak-vbeln,        "Sales and Distribution Document Number
+       posnr LIKE vbap-posnr,        "Sales Document Item
+       matnr LIKE mara-matnr,        "Material Number
+       G_LFIMG(17),                  "Actual quantity delivered (in sales units)
+       PIKMG(17),                    "Pick/stock quantity in sales units
+*       CHARG LIKE LIPS-CHARG,        "Batch Number
+       a_date(10),                    "Actual Goods Movement Date
+       auart like vbak-auart,        "Sales Document Type
+       date(10),                     "Changed On
+      END OF t_indata.
+
+*Output file format for Vendor Excise Maintainance
+DATA: BEGIN OF t_outdata OCCURS 0.
+      INCLUDE STRUCTURE t_indata.
+DATA: desc    type string,            "Description for error fields
+      d_order like vbak-vbeln,        "Sales and Distribution Document Number
+      sort,
+      end of t_outdata.
+
+*Output file format for Vendor Excise Maintainance with header line
+DATA: BEGIN OF t_rest OCCURS 0,
+       VSTEL(14),      "Shipping Point/Receiving Point
+       VBELN(21),      "Sales and Distribution Document Number
+       posnr(5),        "Sales Document Item
+       matnr(18),        "Material Number
+       G_LFIMG(17),    "Actual quantity delivered (in sales units)
+       PIKMG(17),      "Pick/stock quantity in sales units
+       a_date(10),     "Actual Goods Movement Date
+*       CHARG(10),      "Batch Number
+       auart(10),       "Sales Document Type
+       desc type string,
+       d_order(10),    "Sales and Distribution Document Number
+      END OF t_rest.
+
+DATA: it_raw  TYPE truxs_t_text_data.
+
+DATA:  w_upllen            TYPE i VALUE 2000,
+       err_msg(100)        TYPE c,
+       sap_venno           LIKE lfa1-lifnr,
+       batch_name(30)      TYPE c,
+       v_open.
+
+* Constants
+CONSTANTS: c_trans(5)    VALUE 'VL01N', " transaction used
+           delimiter(1)  VALUE ','.
+DATA:  messtab LIKE bdcmsgcoll OCCURS 0 WITH HEADER LINE.
+
+*To store how much datas have read
+DATA: BEGIN OF tot,
+        ok                 TYPE i,
+        read               TYPE i,
+        err                TYPE i,
+      END OF tot.
+
+DATA : g_init TYPE i,
+       g_mess TYPE string,
+       v_flag TYPE c,
+       v_upload,
+       v_dwn.
+
+data : g_date(10)  TYPE c.
+DATA : tabix   LIKE sy-tabix,
+       l_vbeln LIKE vbak-vbeln,
+       v_line  type i,
+       v_line1 type i.
+*----------------------------------------------------------------------*
+* At Selection-Screen for upload and download file
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_upl.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_upl.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_rest.
+*To get file name for upload file at selection screen
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      file_name = p_rest.
+
+*----------------------------------------------------------------------*
+*  Start Of Selection
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+IF p_upl IS INITIAL.
+      MESSAGE 'Please Fill the Upload File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+*Validating Download File Path
+    IF p_rest IS INITIAL.
+      MESSAGE 'Please Fill the Download File Path' TYPE 'S' DISPLAY LIKE 'E'.
+      EXIT.
+    ENDIF.
+  IF p_sess IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Name' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  IF p_mode IS INITIAL.
+    MESSAGE 'Please Fill the BDC Session Mode' TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+*To upload input File
+  PERFORM 100_upload_file.
+  IF v_upload EQ 'X'.
+    CLEAR : v_upload.
+    WRITE: /01   text-001 ,
+         33        ':',
+         36      sy-repid,
+*          92      text-001,
+         92      sy-pagno,
+        /01      text-003,
+         10      'by',
+         33      ':',
+         36      sy-uname,
+         82      sy-datum DD/MM/YY,
+         92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    ULINE.
+    WRITE : 'Error in Uploading the File'.
+    ULINE.
+    EXIT.
+  ENDIF.
+
+  IF t_indata[] IS INITIAL.
+    WRITE: / 'No records were uploaded.'.
+    ULINE.
+  ENDIF.
+
+*Validation of Fields before uploading
+
+  sort t_indata by vbeln matnr.
+  DELETE ADJACENT DUPLICATES FROM t_indata COMPARING vbeln.
+  PERFORM field_validation.
+
+  IF p_test IS INITIAL.
+    LOOP at t_indata.
+     PERFORM create_delivery_order.
+    ENDLOOP.
+  ENDIF.
+
+*----------------------------------------------------------------------*
+*  End Of Selection
+*----------------------------------------------------------------------*
+END-OF-SELECTION.
+IF NOT t_outdata[] IS INITIAL.
+*To Download error file.
+  PERFORM success_error_download.
+ENDIF.
+   WRITE: /01      text-001 ,
+            32        ':',
+            34      sy-repid,
+*          92      text-001,
+            92      sy-pagno,
+           /01      text-002,
+            10      'by',
+            32      ':',
+            34      sy-uname,
+            82      sy-datum DD/MM/YY,
+            92      sy-uzeit.
+
+    ULINE.
+    SKIP 1.
+    IF v_dwn ne 'X'.
+    WRITE: /01     text-003,
+            25     p_rest.
+*         /01     text-006,
+*          20     batch_name.
+    else.
+     clear v_dwn.
+     write : 'Error in Downloading'.
+    endif.
+    ULINE.
+    SKIP 2.
+    WRITE: / 'TOTAL INPUT RECORDS READ',   35 tot-read.
+    IF p_test IS INITIAL.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL Delivery Order CREATED',    35 tot-ok.
+      WRITE: / 'TOTAL Delivery Order IN ERROR',   35 tot-err.
+    ELSE.
+      tot-ok = tot-read - tot-err.
+      WRITE: / 'TOTAL RECORDS SUCCESS',    35 tot-ok.
+      WRITE: / 'TOTAL RECORDS ERROR',   35 tot-err.
+    ENDIF.
+
+*&---------------------------------------------------------------------*
+*&      Form  100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*       To upload input File
+*----------------------------------------------------------------------*
+FORM 100_upload_file .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+      i_line_header        = p_hed
+      i_tab_raw_data       = it_raw
+      i_filename           = p_upl
+    TABLES
+      i_tab_converted_data = t_indata.
+  if sy-subrc NE 0.
+     v_upload = 'X'.
+  endif.
+ENDFORM.                    " 100_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*&      Form  FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*       Validate Fields befor uploading
+*----------------------------------------------------------------------*
+FORM field_validation .
+  DATA: v_charg(10) TYPE n,
+        v_vbeln(10) TYPE n.
+*        v_werks(4)  TYPE n.
+*
+  DATA: v_err.
+*        tabix LIKE sy-tabix.
+*
+*  sort t_indata by vbeln matnr.
+*  describe table t_indata LINES v_line.
+*
+
+  LOOP AT t_indata.
+  ADD 1 TO tot-read.
+    if t_indata-vstel is not INITIAL.
+       TRANSLATE t_indata-vstel TO UPPER CASE.
+       select single * from tvswz
+                       into tvswz
+                      where vstel = t_indata-vstel.
+       if sy-subrc ne 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING t_indata TO t_outdata.
+          CONCATENATE 'Shipping Point '
+                       t_indata-vstel
+                      ' does not exist or active'
+                 INTO  t_outdata-desc.
+          t_outdata-sort = 'B'.
+          APPEND t_outdata.
+          CONTINUE.
+       endif.
+
+    else.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-desc = 'Shipping Point is Mandatory'.
+       t_outdata-sort = 'B'.
+       APPEND t_outdata.
+       CONTINUE.
+    endif.
+
+    if t_indata-vbeln is not INITIAL.
+       v_vbeln = t_indata-vbeln.
+       t_indata-vbeln = v_vbeln.
+       select single * from vbak
+                       into vbak
+                      where vbeln = t_indata-vbeln.
+       if sy-subrc ne 0.
+          ADD 1 TO tot-err.
+          MOVE-CORRESPONDING t_indata TO t_outdata.
+          CONCATENATE 'Sales and Distribution Document Number '
+                       t_indata-vbeln
+                      ' does not exist or active'
+                 INTO  t_outdata-desc.
+          t_outdata-sort = 'B'.
+          APPEND t_outdata.
+          CONTINUE.
+       endif.
+    else.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-desc = 'Sales and Distribution Document Number is Mandatory'.
+       t_outdata-sort = 'B'.
+       APPEND t_outdata.
+       CONTINUE.
+    endif.
+
+    if t_indata-matnr is not INITIAL.
+       TRANSLATE t_indata-MATNR TO UPPER CASE.
+      IF t_indata-MATNR CO '0123456789 '.
+        CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+          EXPORTING
+            input  = t_indata-MATNR
+          IMPORTING
+            OUTPUT = t_indata-MATNR.
+      ENDIF.
+    else.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-desc = 'Material Number is Mandatory'.
+       t_outdata-sort = 'B'.
+       APPEND t_outdata.
+       CONTINUE.
+    endif.
+
+    if t_indata-g_lfimg is INITIAL.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-desc = 'Delivery quantity is Mandatory'.
+       t_outdata-sort = 'B'.
+       APPEND t_outdata.
+       CONTINUE.
+    else.
+       t_indata-pikmg = t_indata-g_lfimg.
+    endif.
+
+    if t_indata-a_date is initial.
+       ADD 1 TO tot-err.
+       MOVE-CORRESPONDING t_indata TO t_outdata.
+       t_outdata-desc = 'Actual Goods Movement Date is mandatory'.
+       t_outdata-sort = 'B'.
+       APPEND t_outdata.
+       CONTINUE.
+    endif.
+
+    TRANSLATE t_indata-posnr to UPPER CASE.
+    TRANSLATE t_indata-auart to UPPER CASE.
+
+*    CONCATENATE sy-datum+6(2)
+*                '.'
+*                sy-datum+4(2)
+*                '.'
+*                sy-datum+0(4)
+*               INTO t_indata-date.
+     t_indata-date = p_date.
+     modify t_indata.
+  ENDLOOP.
+
+
+ENDFORM.                    " FIELD_VALIDATION
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_DELIVERY_ORDER
+*&---------------------------------------------------------------------*
+*  Create the Delivery order based on the data from the i/pfile.       *
+*----------------------------------------------------------------------*
+FORM CREATE_DELIVERY_ORDER.
+  CLEAR: err_msg,
+         batch_name,
+         t_outdata.
+
+  PERFORM do_vl01n_by_calltran
+                     TABLES t_indata
+                     USING  p_mode        "Show errors only
+                            err_msg
+                            batch_name
+                            sap_venno.
+
+*perform bdc_transaction using 'VL01N'.
+  CALL TRANSACTION 'VL01N' USING bdcdata MODE p_mode MESSAGES INTO messtab.
+  IF sy-subrc NE 0.
+    zzret_code = sy-subrc.
+    IF v_open NE 'X'.
+      PERFORM bdc_open_group USING p_sess.
+      v_open = 'X'.
+    ENDIF.
+    PERFORM bdc_insert USING 'VL01N'.
+  ELSE.
+    zzret_code = 0.
+  ENDIF.
+*  IF zzret_code = 0.
+*    sap_venno = sy-msgv2.
+*    t_outdata-d_order = sap_venno.
+*  ELSE.
+*    CLEAR sap_venno.
+*  ENDIF.
+
+*  READ TABLE messtab WITH  KEY msgtyp = 'E'.
+   LOOP AT messtab WHERE MSGTYP = 'E'.
+*  IF sy-subrc =  0.
+    AT LAST.
+    ADD 1 TO tot-err.
+    ENDAT.
+    MOVE-CORRESPONDING t_indata TO t_outdata.
+    t_outdata-sort = 'B'.
+*Get the Error details
+    PERFORM format_message.
+    APPEND t_outdata.
+    ENDLOOP.
+
+*  ELSE.
+ LOOP AT messtab WHERE MSGTYP = 'S'.
+    IF messtab-MSGV1 IS NOT INITIAL
+    AND messtab-MSGV2 IS NOT INITIAL.
+    AT LAST.
+    ADD 1 TO tot-ok.
+    ENDAT.
+*Success Message
+    MOVE-CORRESPONDING t_indata TO t_outdata.
+    t_outdata-matnr = ' '.
+    t_outdata-sort = 'A'.
+    T_OUTDATA-d_order = messtab-MSGV2.
+    CONCATENATE 'Delivery Order  '
+                T_OUTDATA-d_order
+                '  has been saved '
+          INTO  T_OUTDATA-DESC.
+    APPEND t_outdata.
+  ENDIF.
+  ENDLOOP.
+
+  IF v_open = 'X'.
+      PERFORM bdc_close_group USING p_sess.
+    ENDIF.
+  REFRESH bdcdata.
+  clear : v_open,
+          messtab.
+  refresh : messtab.
+
+ENDFORM.                    " CREATE_DELIVERY_ORDER
+
+
+*&---------------------------------------------------------------------*
+*&      Form  FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*        Get the Error details
+*----------------------------------------------------------------------*
+FORM format_message .
+  clear t_outdata-desc.
+  LOOP AT messtab WHERE msgtyp = 'E'.
+    CALL FUNCTION 'FORMAT_MESSAGE'
+      EXPORTING
+        id        = messtab-msgid
+        lang      = 'EN'
+        no        = messtab-msgnr
+        v1        = messtab-msgv1
+        v2        = messtab-msgv2
+        v3        = messtab-msgv3
+        v4        = messtab-msgv4
+      IMPORTING
+        msg       = g_mess
+      EXCEPTIONS
+        not_found = 1
+        OTHERS    = 2.
+    IF sy-subrc <> 0.
+
+    ENDIF.
+
+    CONCATENATE t_outdata-desc
+                g_mess
+                INTO t_outdata-desc SEPARATED BY space.
+  ENDLOOP.
+ENDFORM.                    " FORMAT_MESSAGE
+*&---------------------------------------------------------------------*
+*&      Form  DO_VL01N_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*      Fill the appropriate screens for the transaction and            *
+*       Call transaction Vl01N (Create Outbound Dlv. with Order Ref.)  *
+*----------------------------------------------------------------------*
+FORM DO_VL01N_BY_CALLTRAN  TABLES   P_T_INDATA STRUCTURE T_INDATA
+                                      "Insert correct name for <...>
+                           USING    P_P_MODE
+                                    P_ERR_MSG
+                                    P_BATCH_NAME
+                                    P_SAP_VENNO.
+
+  PERFORM process_screen_100.
+
+ENDFORM.                    " DO_VL01N_BY_CALLTRAN
+*&---------------------------------------------------------------------*
+*&      Form  process_screen_100.
+*&---------------------------------------------------------------------*
+*       This is the initial screen of VL01N - where Sales document and *
+*       Shipping point are selected                                    *
+*----------------------------------------------------------------------*
+FORM process_screen_100.
+
+PERFORM bdc_dynpro   USING 'SAPMV50A'       '4001'.
+PERFORM bdc_field    USING 'BDC_CURSOR'     'LV50C-VBELN'.
+PERFORM bdc_field    USING 'BDC_OKCODE'     '/00'.
+PERFORM bdc_field    USING 'LIKP-VSTEL'     t_indata-vstel."'T001'.
+PERFORM bdc_field    USING 'LV50C-DATBI'    t_indata-date."'15.04.2009'.
+PERFORM bdc_field    USING 'LV50C-VBELN'    t_indata-vbeln."'211000155'.
+PERFORM bdc_dynpro   USING 'SAPMV50A'       '1000'.
+PERFORM bdc_field    USING 'BDC_OKCODE'     '=T\06'.
+PERFORM bdc_field    USING 'BDC_CURSOR'     'LIPS-MATNR(02)'.
+
+PERFORM bdc_dynpro   USING 'SAPMV50A'       '1000'.
+PERFORM bdc_field    USING 'BDC_OKCODE'     '=SICH_T'.
+PERFORM bdc_field    USING 'BDC_CURSOR'     'LIKP-WADAT_IST'.
+PERFORM bdc_field    USING 'LIKP-WADAT_IST' t_indata-a_date."'15.04.2009'.
+
+ENDFORM.                    " process_screen_100.
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_SCREEN_300
+*&---------------------------------------------------------------------*
+*    screen where picked quantity is maintained
+*----------------------------------------------------------------------*
+FORM PROCESS_SCREEN_300.
+*
+*PERFORM bdc_dynpro      using 'SAPMV50A'       '4001'.
+*PERFORM bdc_field       using 'BDC_CURSOR'     'LV50C-VBELN'.
+*PERFORM bdc_field       using 'BDC_OKCODE'     '/00'.
+*PERFORM bdc_field       using 'LIKP-VSTEL'     t_indata-vstel."'T001'.
+*PERFORM bdc_field       using 'LV50C-DATBI'    t_indata-date."'15.04.2009'.
+*PERFORM bdc_field       using 'LV50C-VBELN'    t_indata-vbeln."'211000155'.
+*PERFORM bdc_dynpro      using 'SAPMV50A'       '1000'.
+*PERFORM bdc_field       using 'BDC_OKCODE'     '=T\06'.
+**PERFORM bdc_field       using 'LIKP-BLDAT'     '15.04.2009'.
+*PERFORM bdc_field       using 'BDC_CURSOR'     'LIPS-MATNR(02)'.
+**PERFORM bdc_field       using 'LIKP-KODAT'     '15.04.2009'.
+**PERFORM bdc_field       using 'LIKP-KOUHR'     '00:00:00'.
+*
+*PERFORM bdc_dynpro      using 'SAPMV50A'       '1000'.
+*PERFORM bdc_field       using 'BDC_OKCODE'     '=SICH_T'.
+**PERFORM bdc_field       using 'LIKP-BLDAT'     '15.04.2009'.
+*PERFORM bdc_field       using 'BDC_CURSOR'     'LIKP-WADAT_IST'.
+**PERFORM bdc_field       using 'LIKP-WADAT'     '15.04.2009'.
+**PERFORM bdc_field       using 'LIKP-WAUHR'     '00:00:00'.
+*PERFORM bdc_field       using 'LIKP-WADAT_IST' t_indata-a_date."'15.04.2009'.
+
+ENDFORM.                    " PROCESS_SCREEN_300
+*&---------------------------------------------------------------------*
+*&      Form  SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*       Success and Error file Download
+*----------------------------------------------------------------------*
+form SUCCESS_ERROR_DOWNLOAD .
+
+    SORT t_outdata BY sort.
+    READ TABLE t_outdata INDEX 1.
+    IF t_outdata-sort = 'A'.
+      CLEAR : t_outdata.
+      t_outdata-vstel = 'Succ'.
+      INSERT t_outdata INTO t_outdata INDEX 1.
+    ENDIF.
+
+    READ TABLE t_outdata WITH KEY sort = 'B'.
+    IF sy-subrc = 0.
+      g_init = sy-tabix.
+      CLEAR : t_outdata.
+      t_outdata-vstel = 'Erro'.
+      INSERT t_outdata INTO t_outdata INDEX g_init.
+      g_init = g_init - 1.
+*      CLEAR t_err.
+      IF g_init IS NOT INITIAL.
+        INSERT INITIAL LINE INTO  t_outdata INDEX g_init.
+      ENDIF.
+    ENDIF.
+*Download error and Success files
+    PERFORM download_result.
+*  ENDIF.
+**Success Download
+*    PERFORM success_download.
+endform.                    " SUCCESS_ERROR_DOWNLOAD
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*       Download error and Success files
+*----------------------------------------------------------------------*
+form DOWNLOAD_RESULT .
+DATA : f_string TYPE string.
+  f_string = p_rest.
+  PERFORM download_header_line.
+
+  LOOP AT t_outdata.
+    MOVE-CORRESPONDING t_outdata TO t_rest.
+    IF t_outdata-vstel = 'Erro'.
+      t_rest-vstel = 'Error'.
+    ELSEIF t_outdata-vstel = 'Succ'.
+      t_rest-vstel = 'Success'.
+    ENDIF.
+    APPEND t_rest.
+  ENDLOOP.
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+*    BIN_FILESIZE                    =
+      filename                        = f_string
+     filetype                        = 'ASC'
+*    APPEND                          = ' '
+     write_field_separator           = 'X'
+    TABLES
+      data_tab                        = t_rest[]
+*    FIELDNAMES                      =
+   EXCEPTIONS
+     file_write_error                = 1
+     no_batch                        = 2
+     gui_refuse_filetransfer         = 3
+     invalid_type                    = 4
+     no_authority                    = 5
+     unknown_error                   = 6
+     header_not_allowed              = 7
+     separator_not_allowed           = 8
+     filesize_not_allowed            = 9
+     header_too_long                 = 10
+     dp_error_create                 = 11
+     dp_error_send                   = 12
+     dp_error_write                  = 13
+     unknown_dp_error                = 14
+     access_denied                   = 15
+     dp_out_of_memory                = 16
+     disk_full                       = 17
+     dp_timeout                      = 18
+     file_not_found                  = 19
+     dataprovider_exception          = 20
+     control_flush_error             = 21
+     OTHERS                          = 22
+            .
+  IF sy-subrc = 0.
+     clear t_rest[].
+  ELSE.
+    v_dwn = 'X'.
+  ENDIF.
+endform.                    " DOWNLOAD_RESULT
+*&---------------------------------------------------------------------*
+*&      Form  DOWNLOAD_HEADER_LINE
+*&---------------------------------------------------------------------*
+*       Header line for output data
+*----------------------------------------------------------------------*
+form DOWNLOAD_HEADER_LINE .
+       t_rest-vstel   = 'Shipping Point'.
+       t_rest-vbeln   = 'Sales Document Number'.
+       t_rest-posnr   = 'Posnr'.
+       t_rest-matnr   = 'Material Number'.
+       t_rest-g_lfimg = 'Delivery quantity'.
+       t_rest-pikmg   = 'Picking quantity'.
+       t_rest-a_date  = 'Act.Movement Date'.
+*       t_rest-charg   = 'Batch'.
+       t_rest-auart   = 'Order Type'.
+       t_rest-desc    = 'Description'.
+       t_rest-d_order = 'Del.Order'.
+       INSERT  t_rest INDEX 1.
+endform.                    " DOWNLOAD_HEADER_LINE
