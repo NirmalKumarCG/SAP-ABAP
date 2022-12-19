@@ -36,3 +36,24 @@ DATA(lv_code) = lv_xml->get_first_child( ).
 
 * Write the code to the console
 WRTIE : / lv_code.
+
+
+DATA: lv_http_client TYPE REF TO cl_http_client.
+
+* Create an HTTP client object
+lv_http_client = cl_http_client=>create( ).
+
+* Set the API hostname and endpoint URL
+lv_http_client->set_request_uri( 'https://api.openai.com/v1/codegen' ).
+
+* Set the API key as a request header
+lv_http_client->set_header( name = 'Authorization' value = 'your_api_key' ).
+
+* Set the request method and data
+lv_http_client->set_request_method( 'POST' ).
+lv_http_client->set_request_data( '{"model": "text-davinci-002", "prompt": "Write a function to calculate the factorial of a number", "max_tokens": 2048}' ).
+
+* Send the API request and receive the response
+lv_http_client->send( ).
+lv_http_response = lv_http_client->receive( ).
+
